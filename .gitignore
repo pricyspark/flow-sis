@@ -1,5 +1,8 @@
 notes.txt
 pseudo.txt
 *.mp4
+*.jpg
+*.png
+*.csv
 flowsis/models/*
 !flowsis/models/.gitkeep

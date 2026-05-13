@@ -1,16 +1,12 @@
-import os
 import cv2
-import random
-import shutil
-import argparse
 import imagehash
 import numpy as np
 from PIL import Image
 from pathlib import Path
 from numpy.typing import NDArray
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from sklearn.cluster import AgglomerativeClustering
-from typing import Dict, List, Optional, Set, Tuple, Literal
+from typing import Dict, List, Optional, Tuple, Literal
 
 @dataclass
 class FrameRecord:
@@ -139,7 +135,14 @@ def cluster_phash(
         sets.setdefault(int(label), []).append(i)
             
     clusters = list(sets.values())
-    clusters.sort(key=lambda idxs: (-len(idxs), min(records[i].frame_idx for i in idxs)))
+    
+    # Sort clusters by size
+    clusters.sort(
+        key = lambda idxs: (
+            -len(idxs),
+            min(records[i].frame_idx for i in idxs)
+        )
+    )
     return clusters
 
 def filtered_medoid(
@@ -147,6 +150,18 @@ def filtered_medoid(
     cluster_idxs: List[int],
     blur_filter: float = 0.3
 ) -> Tuple[FrameRecord, int, float]:
+    """
+    Filter blurry frames and return frame with lowest average Hamming distance
+    within a single cluster.
+
+    Args:
+        records (List[FrameRecord]): _description_
+        cluster_idxs (List[int]): _description_
+        blur_filter (float, optional): _description_. Defaults to 0.3.
+
+    Returns:
+        Tuple[FrameRecord, int, float]: _description_
+    """
     cluster_sorted = sorted(
         cluster_idxs,
         key = lambda i : records[i].blur_score,
@@ -236,12 +251,16 @@ def sample_video(
             candidate_count = candidate_count,
             avg_hamming = avg_hamming,
         ))
-        
+    
+    # # Sort keyframes by order
+    # samples.sort(key=lambda cs: cs.selected.frame_idx)
+    
     return samples
 
 def save_samples(
     samples: List[ClusterSample],
     output_dir: Path,
+    img_ext: str = ".jpg",
     jpeg_quality: int = 95,
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -253,10 +272,53 @@ def save_samples(
     for sample in samples:
         record = sample.selected
         
+        filename = (
+            f"{record.video_path.stem}"
+            f"_frame-{record.frame_idx:06d}"
+            f"_cluster-{sample.cluster_id:04d}"
+            f"{img_ext}"
+        )
         
+        output_path = output_dir / filename
+        
+        if img_ext.lower() in (".jpg", ".jpeg"):
+            cv2.imwrite(
+                str(output_path),
+                record.frame_bgr,
+                [int(cv2.IMWRITE_JPEG_QUALITY), jpeg_quality],
+            )
+        else:
+            cv2.imwrite(str(output_path), record.frame_bgr)
+            
+        manifest_rows.append(
+            ",".join([
+                str(record.video_path),
+                str(sample.cluster_id),
+                str(record.frame_idx),
+                f"{record.blur_score:.04f}",
+                str(sample.cluster_size),
+                str(sample.candidate_count),
+                f"{sample.avg_hamming:.04f}",
+                str(output_path),
+            ])
+        )
+        
+    manifest_path = output_dir / "frame_manifest.csv"
+    manifest_path.write_text("\n".join(manifest_rows), encoding="utf-8")
     
 def main():
-    print(len(sample_video(Path('data/raw/2.mp4'))))
-
+    video_dir = Path("data/raw")
+    frame_dir = Path("data/frames")
+    assert not video_dir.is_file()
+    assert not frame_dir.is_file()
+    
+    # This may get pretty large if there's lots of data, maybe periodically flush buffer to file
+    all_samples = []
+    for video in video_dir.rglob("*.mp4"):
+        samples = sample_video(video)
+        all_samples.extend(samples)
+    
+    save_samples(all_samples, frame_dir)
+    
 if __name__ == "__main__":
     main()
