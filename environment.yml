@@ -9,5 +9,9 @@ dependencies:
   - torchvision
   - opencv
   - transformers
+  - accelerate
   - imagehash
   - scikit-learn
+  - jupyter
+  - pip:
+    - kernels

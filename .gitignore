@@ -6,3 +6,5 @@ pseudo.txt
 *.csv
 flowsis/models/*
 !flowsis/models/.gitkeep
+*.npy
+*.npz
