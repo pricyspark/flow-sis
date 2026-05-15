@@ -10,6 +10,7 @@ dependencies:
   - opencv
   - transformers
   - accelerate
+  - datasets
   - imagehash
   - scikit-learn
   - jupyter

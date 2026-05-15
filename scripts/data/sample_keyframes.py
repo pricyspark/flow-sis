@@ -7,14 +7,18 @@ from numpy.typing import NDArray
 from dataclasses import dataclass
 from sklearn.cluster import AgglomerativeClustering
 from typing import Dict, List, Optional, Tuple, Literal
+import time
 
 @dataclass
 class FrameRecord:
     video_path: Path
+    video_idx: int
     frame_idx: int
     phash: int
     blur_score: float
     frame_bgr: NDArray
+    height: int
+    width: int
     
 @dataclass
 class ClusterSample:
@@ -75,13 +79,17 @@ def extract_frame_records(
         if frame_idx % frame_stride == 0:
             phash = compute_phash_u64(frame, hash_size=hash_size)
             blur = var_laplacian(frame)
+            video_idx = int(video_path.stem.partition('_')[0])
             
             records.append(FrameRecord(
                 video_path = video_path,
+                video_idx = video_idx,
                 frame_idx = frame_idx,
                 phash = phash,
                 blur_score = blur,
-                frame_bgr = frame.copy()
+                frame_bgr = frame.copy(),
+                height = frame.shape[0],
+                width = frame.shape[1]
             ))
             
         frame_idx += 1
@@ -252,8 +260,8 @@ def sample_video(
             avg_hamming = avg_hamming,
         ))
     
-    # # Sort keyframes by order
-    # samples.sort(key=lambda cs: cs.selected.frame_idx)
+    # Sort keyframes by order
+    samples.sort(key=lambda cs: cs.selected.frame_idx)
     
     return samples
 
@@ -266,7 +274,7 @@ def save_samples(
     output_dir.mkdir(parents=True, exist_ok=True)
     
     manifest_rows = [
-        "video_path,cluster_id,frame_idx,blur_score,cluster_size,candidate_count,avg_hamming,output_path"
+        "video_path,id,height,width,video_id,cluster_id,frame_idx,blur_score,cluster_size,candidate_count,avg_hamming,output_path"
     ]
     
     for sample in samples:
@@ -293,12 +301,16 @@ def save_samples(
         manifest_rows.append(
             ",".join([
                 str(record.video_path),
+                str((record.video_idx + 1) * int(1e10) + (sample.cluster_id + 1) * int(1e6) + record.frame_idx),
+                str(record.height),
+                str(record.width),
+                str(record.video_idx),
                 str(sample.cluster_id),
                 str(record.frame_idx),
-                f"{record.blur_score:.04f}",
+                f"{record.blur_score:.4f}",
                 str(sample.cluster_size),
                 str(sample.candidate_count),
-                f"{sample.avg_hamming:.04f}",
+                f"{sample.avg_hamming:.4f}",
                 str(output_path),
             ])
         )
@@ -315,8 +327,11 @@ def main():
     # This may get pretty large if there's lots of data, maybe periodically flush buffer to file
     all_samples = []
     for video in video_dir.rglob("*.mp4"):
+        start = time.perf_counter()
         samples = sample_video(video)
         all_samples.extend(samples)
+        end = time.perf_counter()
+        print(f"Sampled {len(samples)} frames from {video.name} in {end - start:.1f} seconds")
     
     save_samples(all_samples, frame_dir)
     
