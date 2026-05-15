@@ -28,6 +28,7 @@ def main():
         delete_dir(Path("data/frames"))
         delete_dir(Path("data/boxes"))
         delete_dir(Path("data/masks"))
+        delete_dir(Path("data/dataset"))
         print("Deleted")
     else:
         print("Aborted")

@@ -1,10 +1,18 @@
 notes.txt
 pseudo.txt
+
+# Data
 *.mp4
 *.jpg
 *.png
 *.csv
-flowsis/models/*
-!flowsis/models/.gitkeep
 *.npy
 *.npz
+data/**/*.json
+
+# Downloaded models
+flowsis/models/*
+!flowsis/models/.gitkeep
+
+# Generated Huggingface dataset
+*.arrow
