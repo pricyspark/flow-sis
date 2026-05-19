@@ -4,9 +4,9 @@ import json
 import os
 from pathlib import Path
 import csv
-from typing import Dict, Tuple
+from typing import Dict, Tuple, List
 from numpy.typing import NDArray
-from datasets import Dataset, DatasetDict, Features, Sequence, Value, Image
+from datasets import Dataset, DatasetDict, Features, Sequence, Value, Image, ClassLabel
 
 import numpy as np
 
@@ -19,13 +19,22 @@ def load_binary(path: Path) -> np.ndarray:
     arr = flat.reshape(shape).astype(bool)
     return arr
 
-def build_dataset(path: Path, classes: Tuple[Dict[str, str], Dict[str, int]]):
+def build_dataset(
+    path: Path, 
+    classes: Tuple[
+        Dict[str, str], 
+        Dict[str, int], 
+        List[str]
+    ],
+):
     rows = []
     bboxes: Dict[str, NDArray] = {}
     for file in Path("data/boxes").iterdir():
         if file.stem == ".gitkeep":
             continue
         bboxes[file.stem] = np.load(file)
+        
+    vid2label, label2id, id2label = classes
         
     last_image = ""
     bbox_id = 0
@@ -44,8 +53,8 @@ def build_dataset(path: Path, classes: Tuple[Dict[str, str], Dict[str, int]]):
                 continue
             
             bbox = bboxes[video_id][counter]
-            class_str = classes[0][video_id]
-            class_int = classes[1][class_str]
+            class_str = vid2label[video_id]
+            class_int = label2id[class_str]
             
             entry = {
                 "image": image,
@@ -73,7 +82,7 @@ def build_dataset(path: Path, classes: Tuple[Dict[str, str], Dict[str, int]]):
             "id": Sequence(Value("int64")),
             "area": Sequence(Value("float32")),
             "bbox": Sequence(Sequence(Value("float32"), length=4)),
-            "category": Sequence(Value("int64")),
+            "category": Sequence(ClassLabel(names=id2label)),
         },
     })
     
