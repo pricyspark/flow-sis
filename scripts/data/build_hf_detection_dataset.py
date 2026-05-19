@@ -4,7 +4,6 @@ import json
 import os
 from pathlib import Path
 import csv
-from typing import Dict, Tuple, List
 from numpy.typing import NDArray
 from datasets import Dataset, DatasetDict, Features, Sequence, Value, Image, ClassLabel
 
@@ -21,14 +20,14 @@ def load_binary(path: Path) -> np.ndarray:
 
 def build_dataset(
     path: Path, 
-    classes: Tuple[
-        Dict[str, str], 
-        Dict[str, int], 
-        List[str]
+    classes: tuple[
+        dict[str, str], 
+        dict[str, int], 
+        dict[int, str],
     ],
 ):
     rows = []
-    bboxes: Dict[str, NDArray] = {}
+    bboxes: dict[str, NDArray] = {}
     for file in Path("data/boxes").iterdir():
         if file.stem == ".gitkeep":
             continue
@@ -73,6 +72,8 @@ def build_dataset(
             bbox_id += 1
             rows.append(entry)
             
+    category_names = [id2label[i] for i in range(len(id2label))]
+            
     features = Features({
         "image": Image(),
         "image_id": Value("int64"),
@@ -82,7 +83,7 @@ def build_dataset(
             "id": Sequence(Value("int64")),
             "area": Sequence(Value("float32")),
             "bbox": Sequence(Sequence(Value("float32"), length=4)),
-            "category": Sequence(ClassLabel(names=id2label)),
+            "category": Sequence(ClassLabel(names=category_names)),
         },
     })
     
@@ -95,10 +96,12 @@ def build_dataset(
         "test": test_val["test"]
     })
     dataset_splits.save_to_disk(path)
+    # TODO: what to do when there is already a dataset saved
             
 def main():
     with open("data/raw/classes.json") as file:
         classes = json.load(file)
+    classes[2] = {int(k): v for k, v in classes[2].items()}
     build_dataset(Path("data/dataset"), classes)
             
 if __name__ == "__main__":

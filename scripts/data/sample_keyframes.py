@@ -6,7 +6,7 @@ from pathlib import Path
 from numpy.typing import NDArray
 from dataclasses import dataclass
 from sklearn.cluster import AgglomerativeClustering
-from typing import Dict, List, Optional, Tuple, Literal
+from typing import Optional, Literal
 import time
 
 @dataclass
@@ -35,7 +35,7 @@ def frame_to_pil_rgb(frame_bgr: np.ndarray) -> Image.Image:
 def compute_phash_u64(
     frame_bgr: np.ndarray,
     hash_size: int = 8,
-    resize_wh: Tuple[int, int] = (128, 128),
+    resize_wh: tuple[int, int] = (128, 128),
 ) -> int:
     """
     Compute pHash (64-bit when hash_size=8) and return as uint64 int.
@@ -65,10 +65,10 @@ def extract_frame_records(
     video_path: Path,
     frame_stride: int = 1,
     hash_size: int = 8,
-) -> List[FrameRecord]:
+) -> list[FrameRecord]:
     cap = cv2.VideoCapture(video_path)
     
-    records: List[FrameRecord] = []
+    records: list[FrameRecord] = []
     
     frame_idx = 0
     while True:
@@ -97,7 +97,7 @@ def extract_frame_records(
     cap.release()
     return records
 
-def phash_distance_matrix(records: List[FrameRecord]) -> NDArray:
+def phash_distance_matrix(records: list[FrameRecord]) -> NDArray:
     n = len(records)
     dists = np.zeros((n, n), dtype=float)
     
@@ -112,11 +112,11 @@ def phash_distance_matrix(records: List[FrameRecord]) -> NDArray:
     return dists
 
 def cluster_phash(
-    records: List[FrameRecord],
+    records: list[FrameRecord],
     n_samples: int | None = None,
     hamming_threshold: int | None = 12,
     linkage: Literal["complete", "average", "single"] = "complete",
-) -> List[List[int]]:
+) -> list[list[int]]:
     n = len(records)
     if n == 0:
         return []
@@ -138,7 +138,7 @@ def cluster_phash(
     model.fit(dists)
     
     labels = model.labels_
-    sets: Dict[int, List[int]] = {}
+    sets: dict[int, list[int]] = {}
     for i, label in enumerate(labels):
         sets.setdefault(int(label), []).append(i)
             
@@ -154,10 +154,10 @@ def cluster_phash(
     return clusters
 
 def filtered_medoid(
-    records: List[FrameRecord],
-    cluster_idxs: List[int],
+    records: list[FrameRecord],
+    cluster_idxs: list[int],
     blur_filter: float = 0.3
-) -> Tuple[FrameRecord, int, float]:
+) -> tuple[FrameRecord, int, float]:
     """
     Filter blurry frames and return frame with lowest average Hamming distance
     within a single cluster.
@@ -229,7 +229,7 @@ def sample_video(
     hash_size: int = 8,
     n_samples: int | None = None,
     linkage: Literal["complete", "average", "single"] = "complete",
-) -> List[ClusterSample]:
+) -> list[ClusterSample]:
     records = extract_frame_records(
         video_path = video_path,
         frame_stride = frame_stride,
@@ -243,7 +243,7 @@ def sample_video(
         linkage = linkage,
     )
     
-    samples: List[ClusterSample] = []
+    samples: list[ClusterSample] = []
     
     for cluster_id, cluster_idxs in enumerate(clusters):
         medoid, candidate_count, avg_hamming = filtered_medoid(
@@ -266,7 +266,7 @@ def sample_video(
     return samples
 
 def save_samples(
-    samples: List[ClusterSample],
+    samples: list[ClusterSample],
     output_dir: Path,
     img_ext: str = ".jpg",
     jpeg_quality: int = 95,
