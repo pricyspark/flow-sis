@@ -81,16 +81,18 @@ def extract_frame_records(
             blur = var_laplacian(frame)
             video_idx = int(video_path.stem.partition('_')[0])
             
-            records.append(FrameRecord(
-                video_path = video_path,
-                video_idx = video_idx,
-                frame_idx = frame_idx,
-                phash = phash,
-                blur_score = blur,
-                frame_bgr = frame.copy(),
-                height = frame.shape[0],
-                width = frame.shape[1]
-            ))
+            records.append(
+                FrameRecord(
+                    video_path = video_path,
+                    video_idx = video_idx,
+                    frame_idx = frame_idx,
+                    phash = phash,
+                    blur_score = blur,
+                    frame_bgr = frame.copy(),
+                    height = frame.shape[0],
+                    width = frame.shape[1],
+                )
+            )
             
         frame_idx += 1
     
@@ -252,13 +254,15 @@ def sample_video(
             blur_filter = blur_filter,
         )
         
-        samples.append(ClusterSample(
-            cluster_id = cluster_id,
-            selected = medoid,
-            cluster_size = len(cluster_idxs),
-            candidate_count = candidate_count,
-            avg_hamming = avg_hamming,
-        ))
+        samples.append(
+            ClusterSample(
+                cluster_id = cluster_id,
+                selected = medoid,
+                cluster_size = len(cluster_idxs),
+                candidate_count = candidate_count,
+                avg_hamming = avg_hamming,
+            )
+        )
     
     # Sort keyframes by order
     samples.sort(key=lambda cs: cs.selected.frame_idx)
@@ -298,21 +302,29 @@ def save_samples(
         else:
             cv2.imwrite(str(output_path), record.frame_bgr)
             
+        manifest_id = (
+            (record.video_idx + 1) * int(1e10)
+            + (sample.cluster_id + 1) * int(1e6)
+            + record.frame_idx
+        )
+            
         manifest_rows.append(
-            ",".join([
-                str(record.video_path),
-                str((record.video_idx + 1) * int(1e10) + (sample.cluster_id + 1) * int(1e6) + record.frame_idx),
-                str(record.height),
-                str(record.width),
-                str(record.video_idx),
-                str(sample.cluster_id),
-                str(record.frame_idx),
-                f"{record.blur_score:.4f}",
-                str(sample.cluster_size),
-                str(sample.candidate_count),
-                f"{sample.avg_hamming:.4f}",
-                str(output_path),
-            ])
+            ",".join(
+                [
+                    str(record.video_path),
+                    str(manifest_id),
+                    str(record.height),
+                    str(record.width),
+                    str(record.video_idx),
+                    str(sample.cluster_id),
+                    str(record.frame_idx),
+                    f"{record.blur_score:.4f}",
+                    str(sample.cluster_size),
+                    str(sample.candidate_count),
+                    f"{sample.avg_hamming:.4f}",
+                    str(output_path),
+                ]
+            )
         )
         
     manifest_path = output_dir / "frame_manifest.csv"
