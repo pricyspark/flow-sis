@@ -1,108 +1,180 @@
 import argparse
 import csv
 import json
-import os
+import shutil
 from pathlib import Path
-import csv
-from numpy.typing import NDArray
-from datasets import Dataset, DatasetDict, Features, Sequence, Value, Image, ClassLabel
 
 import numpy as np
+from datasets import ClassLabel, Dataset, DatasetDict, Features, Image, Sequence, Value
+from numpy.typing import NDArray
 
-def load_binary(path: Path) -> np.ndarray:
-    data = np.load(path)
-    packed = data["packed"]
-    shape = tuple(data["shape"])
-    n_bits = np.prod(shape)
-    flat = np.unpackbits(packed)[:n_bits]
-    arr = flat.reshape(shape).astype(bool)
-    return arr
+
+DEFAULT_MANIFEST_PATH = Path("data/frames/frame_manifest.csv")
+DEFAULT_BOXES_DIR = Path("data/boxes")
+DEFAULT_CLASSES_PATH = Path("data/raw/classes.json")
+DEFAULT_OUTPUT_PATH = Path("data/dataset")
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Build the Hugging Face detection dataset used by FlowSIS.")
+    parser.add_argument("--manifest_path", type=Path, default=DEFAULT_MANIFEST_PATH)
+    parser.add_argument("--boxes_dir", type=Path, default=DEFAULT_BOXES_DIR)
+    parser.add_argument("--classes_path", type=Path, default=DEFAULT_CLASSES_PATH)
+    parser.add_argument("--output_path", type=Path, default=DEFAULT_OUTPUT_PATH)
+    return parser.parse_args()
+
+
+def load_boxes(boxes_dir: Path) -> dict[str, NDArray[np.float32]]:
+    bboxes: dict[str, NDArray[np.float32]] = {}
+    for file in sorted(boxes_dir.glob("*.npy")):
+        bboxes[file.stem] = np.load(file).astype(np.float32, copy=False)
+    return bboxes
+
+
+def load_classes(
+    classes_path: Path,
+) -> tuple[
+    dict[str, str],
+    dict[str, int],
+    dict[int, str],
+]:
+    with classes_path.open() as file:
+        classes = json.load(file)
+
+    vid2label, label2id, raw_id2label = classes
+    id2label = {int(key): value for key, value in raw_id2label.items()}
+    return vid2label, label2id, id2label
+
 
 def build_dataset(
-    path: Path, 
+    output_path: Path,
     classes: tuple[
-        dict[str, str], 
-        dict[str, int], 
+        dict[str, str],
+        dict[str, int],
         dict[int, str],
     ],
-):
-    rows = []
-    bboxes: dict[str, NDArray] = {}
-    for file in Path("data/boxes").iterdir():
-        if file.stem == ".gitkeep":
-            continue
-        bboxes[file.stem] = np.load(file)
-        
+    *,
+    manifest_path: Path,
+    boxes_dir: Path,
+) -> None:
+    rows: list[dict[str, object]] = []
+    bboxes = load_boxes(boxes_dir)
     vid2label, label2id, id2label = classes
-        
-    last_image = ""
+
+    counters_by_video: dict[str, int] = {}
+    missing_bbox_videos: set[str] = set()
     bbox_id = 0
-    with open("data/frames/frame_manifest.csv", newline='') as file:
-        reader = csv.reader(file)
-        header = next(reader)
+
+    with manifest_path.open(newline="") as file:
+        reader = csv.DictReader(file)
         for row in reader:
-            image, image_id, height, width, video_id = row[:5]
+            video_id = row["video_id"]
             
-            if image != last_image:
-                last_image = image
-                counter = 0
-            
-            if video_id not in bboxes:
-                print(f"{video_id} does not a generated bounding box")
+            if video_id in bboxes:
+                video_boxes = bboxes[video_id]
+            else:
+                missing_bbox_videos.add(video_id)
                 continue
-            
-            bbox = bboxes[video_id][counter]
-            class_str = vid2label[video_id]
-            class_int = label2id[class_str]
-            
-            entry = {
-                "image": image,
-                "image_id": image_id,
-                "height": height,
-                "width": width,
-                "objects": {
-                    "id": [bbox_id],
-                    "area": [bbox[2] * bbox[3]],
-                    "bbox": [list(bbox)],
-                    "category": [class_int],
-                },
-            }
-            
-            counter += 1
+
+            box_index = counters_by_video.get(video_id, 0)
+            if box_index >= len(video_boxes):
+                raise ValueError(
+                    f"Bounding box count mismatch for video_id={video_id}: "
+                    f"requested index {box_index}, but only {len(video_boxes)} boxes are available."
+                )
+
+            bbox: NDArray[np.float32] = video_boxes[box_index]
+            counters_by_video[video_id] = box_index + 1
+
+            class_name = vid2label[video_id]
+            class_id = label2id[class_name]
+
+            rows.append(
+                {
+                    "image": row["output_path"],
+                    "image_id": int(row["id"]),
+                    "height": int(row["height"]),
+                    "width": int(row["width"]),
+                    "video_id": int(video_id),
+                    "frame_idx": int(row["frame_idx"]),
+                    "objects": {
+                        "id": [bbox_id],
+                        "area": [bbox[2] * bbox[3]],
+                        "bbox": [bbox.tolist()],
+                        "category": [class_id],
+                    },
+                }
+            )
             bbox_id += 1
-            rows.append(entry)
-            
-    category_names = [id2label[i] for i in range(len(id2label))]
-            
-    features = Features({
-        "image": Image(),
-        "image_id": Value("int64"),
-        "height": Value("int64"),
-        "width": Value("int64"),
-        "objects": {
-            "id": Sequence(Value("int64")),
-            "area": Sequence(Value("float32")),
-            "bbox": Sequence(Sequence(Value("float32"), length=4)),
-            "category": Sequence(ClassLabel(names=category_names)),
-        },
-    })
-    
+
+    if not rows:
+        raise ValueError("No dataset rows were created. Check the manifest, boxes directory, and class mappings.")
+
+    category_names = [id2label[idx] for idx in range(len(id2label))]
+    features = Features(
+        {
+            "image": Image(),
+            "image_id": Value("int64"),
+            "height": Value("int64"),
+            "width": Value("int64"),
+            "video_id": Value("int64"),
+            "frame_idx": Value("int64"),
+            "objects": {
+                "id": Sequence(Value("int64")),
+                "area": Sequence(Value("float32")),
+                "bbox": Sequence(Sequence(Value("float32"), length=4)),
+                "category": Sequence(ClassLabel(names=category_names)),
+            },
+        }
+    )
+
     dataset = Dataset.from_list(rows, features=features)
     split = dataset.train_test_split(test_size=0.2, seed=42)
     test_val = split["test"].train_test_split(test_size=0.5, seed=42)
-    dataset_splits = DatasetDict({
-        "train": split["train"],
-        "validation": test_val["train"],
-        "test": test_val["test"]
-    })
-    dataset_splits.save_to_disk(path)
-    # TODO: what to do when there is already a dataset saved
-            
-def main():
-    with open("data/raw/classes.json") as file:
-        classes = json.load(file)
-    classes[2] = {int(k): v for k, v in classes[2].items()}
-    build_dataset(Path("data/dataset"), classes)
-            
+    dataset_splits = DatasetDict(
+        {
+            "train": split["train"],
+            "validation": test_val["train"],
+            "test": test_val["test"],
+        }
+    )
+
+    if output_path.exists():
+        shutil.rmtree(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    dataset_splits.save_to_disk(output_path)
+
+    if missing_bbox_videos:
+        print(
+            "build_dataset_warning",
+            {
+                "missing_bbox_videos": sorted(missing_bbox_videos),
+                "num_missing_videos": len(missing_bbox_videos),
+            },
+        )
+
+    print(
+        "build_dataset",
+        {
+            "output_path": str(output_path),
+            "num_rows": len(dataset),
+            "num_train": len(dataset_splits["train"]),
+            "num_validation": len(dataset_splits["validation"]),
+            "num_test": len(dataset_splits["test"]),
+        },
+    )
+
+
+def main() -> None:
+    args = parse_args()
+    classes = load_classes(args.classes_path)
+    build_dataset(
+        args.output_path,
+        classes,
+        manifest_path=args.manifest_path,
+        boxes_dir=args.boxes_dir,
+    )
+
+
 if __name__ == "__main__":
     main()
