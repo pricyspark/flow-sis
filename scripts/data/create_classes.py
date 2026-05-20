@@ -5,6 +5,7 @@ import warnings
 from pathlib import Path
 from collections.abc import Iterable
 
+
 def create_json(
     csv_path: Path, 
     json_path: Path, 
@@ -37,6 +38,7 @@ def create_json(
     with open(json_path, 'w') as file:
         json.dump(output, file, indent=2)
         
+        
 def main():
     create_json(
         Path("data/raw/video_manifest.csv"),
@@ -44,12 +46,6 @@ def main():
         ["ToolStyle", "Class"],
     )
     
+    
 if __name__ == "__main__":
     main()
-   
-    
-'''
-Perkins 113
-
-Dougherty 331
-'''

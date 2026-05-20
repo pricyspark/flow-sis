@@ -9,6 +9,7 @@ from sklearn.cluster import AgglomerativeClustering
 from typing import Optional, Literal
 import time
 
+
 @dataclass
 class FrameRecord:
     video_path: Path
@@ -20,6 +21,7 @@ class FrameRecord:
     height: int
     width: int
     
+    
 @dataclass
 class ClusterSample:
     cluster_id: int
@@ -28,9 +30,11 @@ class ClusterSample:
     candidate_count: int
     avg_hamming: float
 
+
 def frame_to_pil_rgb(frame_bgr: np.ndarray) -> Image.Image:
     rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
     return Image.fromarray(rgb)
+
 
 def compute_phash_u64(
     frame_bgr: np.ndarray,
@@ -50,6 +54,7 @@ def compute_phash_u64(
         v = (v << 1) | int(b)
     return v
 
+
 def var_laplacian(frame_bgr: np.ndarray) -> float:
     """
     Variance of Laplacian on grayscale. Higher => sharper.
@@ -58,8 +63,10 @@ def var_laplacian(frame_bgr: np.ndarray) -> float:
     lap = cv2.Laplacian(gray, cv2.CV_64F)
     return float(lap.var())
 
+
 def hamming_u64(a: int, b: int) -> int:
     return int((a ^ b).bit_count())
+
 
 def extract_frame_records(
     video_path: Path,
@@ -99,6 +106,7 @@ def extract_frame_records(
     cap.release()
     return records
 
+
 def phash_distance_matrix(records: list[FrameRecord]) -> NDArray:
     n = len(records)
     dists = np.zeros((n, n), dtype=float)
@@ -112,6 +120,7 @@ def phash_distance_matrix(records: list[FrameRecord]) -> NDArray:
             dists[j, i] = dist
             
     return dists
+
 
 def cluster_phash(
     records: list[FrameRecord],
@@ -154,6 +163,7 @@ def cluster_phash(
         )
     )
     return clusters
+
 
 def filtered_medoid(
     records: list[FrameRecord],
@@ -223,6 +233,7 @@ def filtered_medoid(
     assert best_idx is not None
     return records[best_idx], candidate_count, best_avg
 
+
 def sample_video(
     video_path: Path,
     hamming_threshold: int = 12,
@@ -268,6 +279,7 @@ def sample_video(
     samples.sort(key=lambda cs: cs.selected.frame_idx)
     
     return samples
+
 
 def save_samples(
     samples: list[ClusterSample],
@@ -329,6 +341,7 @@ def save_samples(
         
     manifest_path = output_dir / "frame_manifest.csv"
     manifest_path.write_text("\n".join(manifest_rows), encoding="utf-8")
+    
     
 def main():
     video_dir = Path("data/raw")
