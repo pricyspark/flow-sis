@@ -296,15 +296,15 @@ def save_samples(
     for sample in samples:
         record = sample.selected
         
+        video_dir = output_dir / f"{record.video_path.stem}"
+        video_dir.mkdir(parents=True, exist_ok=True)
         filename = (
-            f"{record.video_path.stem}"
-            f"_frame-{record.frame_idx:06d}"
+            f"frame-{record.frame_idx:06d}"
             f"_cluster-{sample.cluster_id:04d}"
             f"{img_ext}"
         )
         
-        output_path = output_dir / filename
-        
+        output_path = video_dir / filename
         if img_ext.lower() in (".jpg", ".jpeg"):
             cv2.imwrite(
                 str(output_path),
