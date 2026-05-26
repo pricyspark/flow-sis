@@ -4,6 +4,19 @@ import os
 import warnings
 from pathlib import Path
 from collections.abc import Iterable
+import argparse
+
+
+DEFAULT_CSV_PATH = Path("data/raw/video_manifest.csv")
+DEFAULT_JSON_PATH = Path("data/raw/classes.json")
+DEFAULT_COLS = ["ToolStyle", "Class"]
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Read video manifest to create class mapping.")
+    parser.add_argument("--csv_path", type=Path, default=DEFAULT_CSV_PATH)
+    parser.add_argument("--json_path", type=Path, default=DEFAULT_JSON_PATH)
+    parser.add_argument("--cols", type=list[str], default=DEFAULT_COLS)
+    return parser.parse_args()
 
 
 def create_json(
@@ -40,10 +53,11 @@ def create_json(
         
         
 def main():
+    args = parse_args()
     create_json(
-        Path("data/raw/video_manifest.csv"),
-        Path("data/raw/classes.json"),
-        ["ToolStyle", "Class"],
+        args.csv_path,
+        args.json_path,
+        args.cols,
     )
     
     

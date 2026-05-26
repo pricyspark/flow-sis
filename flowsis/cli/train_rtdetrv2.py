@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import torch
 from datasets import ClassLabel, Dataset, DatasetDict, Image as HFImage, IterableDataset, IterableDatasetDict, load_dataset, load_from_disk
@@ -16,7 +16,9 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from flowsis.rtdetrv2 import RTDetrV2
-from flowsis.utils.training import (
+from flowsis.utils import (
+    AugmentationPipeline,
+    TransformDataset,
     build_autocast_context,
     build_grad_scaler,
     get_device,
@@ -450,13 +452,20 @@ def main() -> None:
         device=device,
     )
 
-    train_loader = build_dataloader(
+    transform_dataset = TransformDataset(
         dataset[args.train_split],
+        AugmentationPipeline([])
+    )
+    transform_dataset = cast(Dataset, transform_dataset) # To calm type checker on HF Dataset and torch Dataset
+
+    train_loader = build_dataloader(
+        split_dataset=transform_dataset,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
         shuffle=not args.overfit_single_batch,
         seed=args.seed,
     )
+    
     validation_loader = None
     if args.validation_split in dataset:
         validation_loader = build_dataloader(

@@ -8,6 +8,11 @@ from dataclasses import dataclass
 from sklearn.cluster import AgglomerativeClustering
 from typing import Optional, Literal
 import time
+import argparse
+
+
+DEFAULT_VIDEO_DIR = Path("data/raw")
+DEFAULT_FRAME_DIR = Path("data/frames")
 
 
 @dataclass
@@ -29,6 +34,13 @@ class ClusterSample:
     cluster_size: int
     candidate_count: int
     avg_hamming: float
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Sample keyframes from videos using pHash and agglomerative clustering.")
+    parser.add_argument("--video_dir", type=Path, default=DEFAULT_VIDEO_DIR)
+    parser.add_argument("--frame_dir", type=Path, default=DEFAULT_FRAME_DIR)
+    return parser.parse_args()
 
 
 def frame_to_pil_rgb(frame_bgr: np.ndarray) -> Image.Image:
@@ -344,21 +356,20 @@ def save_samples(
     
     
 def main():
-    video_dir = Path("data/raw")
-    frame_dir = Path("data/frames")
-    assert not video_dir.is_file()
-    assert not frame_dir.is_file()
+    args = parse_args()
+    assert not args.video_dir.is_file()
+    assert not args.frame_dir.is_file()
     
     # This may get pretty large if there's lots of data, maybe periodically flush buffer to file
     all_samples = []
-    for video in video_dir.rglob("*.mp4"):
+    for video in args.video_dir.rglob("*.mp4"):
         start = time.perf_counter()
         samples = sample_video(video)
         all_samples.extend(samples)
         end = time.perf_counter()
         print(f"Sampled {len(samples)} frames from {video.name} in {end - start:.1f} seconds")
     
-    save_samples(all_samples, frame_dir)
+    save_samples(all_samples, args.frame_dir)
     
 if __name__ == "__main__":
     main()
