@@ -147,7 +147,9 @@ class RTDetrV2(nn.Module):
 
         processor_kwargs: dict[str, Any] = {"return_tensors": "pt"}
         if image_size is not None:
-            processor_kwargs["size"] = {"height": image_size, "width": image_size}
+            processor_kwargs["size"] = {"shortest_edge": image_size, "longest_edge": image_size}
+            processor_kwargs["do_pad"] = True
+            processor_kwargs["pad_size"] = {"height": image_size, "width": image_size}
 
         if annotations is None:
             batch = self.processor.preprocess(images=image_input, **processor_kwargs)
