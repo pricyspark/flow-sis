@@ -4,9 +4,11 @@ import torch
 from torch.utils.data import Dataset
 from collections.abc import Iterable, Callable
 from pathlib import Path
-from numpy.typing import NDArray
+from numpy.typing import NDArray, ArrayLike
 from PIL import Image
 import math
+from typing import Any
+
 
 DEFAULT_MASKS_DIR = Path("data/masks")
 
@@ -35,12 +37,17 @@ class TransformDataset(Dataset):
     
     
 class AugmentationPipeline:
-    def __init__(self, augments: Iterable[Callable]):
+    def __init__(
+        self, 
+        augments: Iterable[Callable], 
+        augment_kwargs: Iterable[Any]
+    ):
         self.augments = list(augments)
+        self.augment_kwargs = augment_kwargs
         
     def __call__(self, example: dict):
-        for i, augment in enumerate(self.augments):
-            example = augment(example, i == len(self) - 1)
+        for i, (augment, kwargs) in enumerate(zip(self.augments, self.augment_kwargs)):
+            example = augment(example, i == len(self) - 1, **kwargs)
         return example
     
     def __len__(self) -> int:
@@ -81,9 +88,12 @@ def mask2xywh(mask: NDArray) -> list[int] | None:
     ]
     
 
-def rotation_augment(example: dict, last: bool):
-    # TODO: check if mask already saved in example before loading
-    mask = load_mask(example)
+def rotation_augment(example: dict, last: bool, **kwargs):
+    # TODO: make this work with multiple objects
+    if "mask" in example["objects"]:
+        mask = example["objects"]["mask"][0]
+    else:
+        mask = load_mask(example)
     angle = random.uniform(0, 360)
     img: Image.Image = example["image"]
     W, H = img.size
@@ -103,58 +113,136 @@ def rotation_augment(example: dict, last: bool):
     )
     mask_rot = np.array(mask_img_rot) > 0
     
-    W_crop, H_crop = rotate_crop_bounds(W, H, math.radians(angle))
-    W_crop = int(W_crop // 2) * 2
-    H_crop = int(H_crop // 2) * 2
+    # Get final crop dimensions
+    W_crop, H_crop, dx, dy = rotate_crop_bounds(W, H, math.radians(angle))
+    W_crop, H_crop = round(W_crop), round(H_crop)
+    print(W_crop, H_crop, dx, dy)
     
-    # TODO: calculate bias to shift rectangle to preserve ROI
+    # Get offset 
+    bbox = mask2xywh(mask_rot)
+    assert bbox is not None
+    x, y, w, h = bbox
+    bbox_center = np.array((x + w / 2, y + h / 2))
+    frame_center = np.array((W_rot / 2, H_rot / 2))
+    offset = bbox_center - frame_center
     
+    # Project offset
+    offset_proj = capped_projection(offset, (dx, dy))
+    offset_proj = np.trunc(offset_proj).astype(np.int32)
+        
+    # Get crop bounds
     W_diff = W_rot - W_crop
-    H_diff = H_rot - W_crop
-    col_start = W_diff // 2
-    row_start = H_diff // 2
+    H_diff = H_rot - H_crop
+    col_start = W_diff // 2 + offset_proj[0]
+    row_start = H_diff // 2 + offset_proj[1]
     col_end = col_start + W_crop
     row_end = row_start + H_crop
+    if "pad" in kwargs:
+        row_start += kwargs["pad"]
+        col_start += kwargs["pad"]
+        row_end -= kwargs["pad"]
+        col_end -= kwargs["pad"]
     col_slice = slice(col_start, col_end)
     row_slice = slice(row_start, row_end)
     
     img_crop = img_rot.crop((col_start, row_start, col_end, row_end))
     mask_crop = mask_rot[row_slice, col_slice]
     
-    # TODO: modify img and mask in example
+    example["image"] = img_crop
+    example["height"] = row_end - row_start
+    example["width"] = col_end - col_start
+    
+    cropped_bbox = mask2xywh(mask_crop)
+    assert cropped_bbox
+    x_crop, y_crop, w_crop, h_crop = cropped_bbox
+    example["objects"]["area"].append(w_crop * h_crop)
+    example["objects"]["bbox"] = cropped_bbox
+    example["objects"].setdefault("mask", []).append(mask_crop)
+    
+    return example
 
-def rotate_crop_bounds(w: int, h: int, theta: float) -> tuple[float, float]:
+
+def rotate_crop_bounds(w: int, h: int, theta: float) -> tuple[float, float, float, float]:
+    # Calculates dimensions for the no-padding rectange with maximum area.
+    # Equivalent maximization problem:
+    # 
+    # 0 <= x <= w / 2, 0 <= y <= h / 2
+    # 
+    # y <= -tan(theta) * x + h / (2 * cos(theta))
+    # y <= tan(theta + pi / 2) * x + w / (2 * sin(theta))
+    # 
+    # f(x, y) = x * y
+    # 
+    # x*, y* = argmax_(x,y)(f(x,y))
+    
     theta = theta % math.pi
+    reflect = False
     if theta >= math.pi / 2:
         theta = math.pi - theta
+        reflect = True
         
     aspect_ratio = w / h
     c = math.cos(theta)
     s = math.sin(theta)
-    
     if theta < math.pi / 3:
         bound = math.sin(2 * theta)
-        if aspect_ratio <= bound:
-            x = w / (4 * c)
-            y = w / (4 * s)
+        if aspect_ratio < bound:
+            x = w / (2 * c)
+            y = w / (2 * s)
+            
+            dx = (h * s - x) / 2 # h * s / 2 - w / (4 * c)
+            dy = (h * c - y) / 2 # h * c / 2 - w / (4 * s)
         elif aspect_ratio <= 1 / bound:
-            denom = 2 * (c * c - s * s)
+            denom = c * c - s * s
             x = (w * c - h * s) / denom
             y = (h * c - w * s) / denom
+            dx, dy = 0, 0
         else:
-            x = h / (4 * s)
-            y = h / (4 * c)
+            x = h / (2 * s)
+            y = h / (2 * c)
+            
+            dx = (w * c - x) / 2
+            dy = (w * s - y) / 2
     else:
-        bound = (1 + c - 2 * c * c) / s # equiv s + c * tan(theta / 2)
-        if aspect_ratio <= 1 / bound:
-            x = w / 2
-            y = w / 2 * math.tan(theta / 2)
-        elif aspect_ratio <= bound:
-            denom = 2 * (c * c - s * s)
+        t = math.tan(theta / 2)
+        k = s + c * t
+        if aspect_ratio < 1 / k:
+            x = w
+            y = w * math.tan(theta / 2)
+            
+            dx = (h - w * k) * s / 2
+            dy = (h - w * k) * c / 2
+        elif aspect_ratio <= k:
+            denom = c * c - s * s
             x = (w * c - h * s) / denom
             y = (h * c - w * s) / denom
+            dx, dy = 0, 0
         else:
-            x = h / 2 * math.tan(theta / 2)
-            y = h / 2
+            x = h * math.tan(theta / 2)
+            y = h
+            
+            dx = (w - h * k) * c / 2
+            dy = (w - h * k) * s / 2
         
-    return 2 * x, 2 * y
+    dy *= -1 if reflect else 1        
+    return x, y, dx, dy
+
+
+def capped_projection(a: ArrayLike, b: ArrayLike):
+    a = np.asarray(a, dtype=float)
+    b = np.asarray(b, dtype=float)
+    # If zero vector, return zero vector
+    if np.all(b == 0):
+        return np.zeros_like(b)
+    
+    ab = np.sum(a * b, axis=-1, keepdims=True)
+    bb = np.sum(b * b, axis=-1, keepdims=True)
+    coef = np.divide(
+        ab,
+        bb,
+        out=np.zeros_like(bb),
+        where=bb != 0,
+    )
+    
+    coef = np.clip(coef, -1., 1.)
+    return coef * b
