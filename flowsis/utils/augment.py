@@ -8,6 +8,7 @@ from numpy.typing import NDArray, ArrayLike
 from PIL import Image
 import math
 from typing import Any
+from scipy.ndimage import zoom
 
 
 DEFAULT_MASKS_DIR = Path("data/masks")
@@ -42,12 +43,13 @@ class AugmentationPipeline:
         augments: Iterable[Callable], 
         augment_kwargs: Iterable[Any]
     ):
+        # TODO: maybe just dict mapping function to its kwargs
         self.augments = list(augments)
         self.augment_kwargs = augment_kwargs
         
     def __call__(self, example: dict):
-        for i, (augment, kwargs) in enumerate(zip(self.augments, self.augment_kwargs)):
-            example = augment(example, i == len(self) - 1, **kwargs)
+        for augment, kwargs in zip(self.augments, self.augment_kwargs):
+            example = augment(example, **kwargs)
         return example
     
     def __len__(self) -> int:
@@ -69,7 +71,7 @@ def load_mask(example: dict, path=None) -> NDArray[np.bool_]:
 
 def mask2xywh(mask: NDArray) -> list[int] | None:
     rows, cols = np.nonzero(mask)
-    if not rows:
+    if len(rows) == 0:
         return None
     
     x_min = cols.min()
@@ -88,7 +90,55 @@ def mask2xywh(mask: NDArray) -> list[int] | None:
     ]
     
 
-def rotation_augment(example: dict, last: bool, **kwargs):
+def roi_square(example: dict, **kwargs):
+    image_size = kwargs["image_size"]
+    
+    img: Image.Image = example["image"]
+    W, H = img.size
+    zoom_factor = image_size / min(W, H)
+    
+    objects = example["objects"]
+    bboxes = np.array(objects["bbox"], dtype=float)
+    #print(example["objects"]["bbox"])
+    x1 = np.min(bboxes[:, 0])
+    y1 = np.min(bboxes[:, 1])
+    
+    x2 = np.max(bboxes[:, 0] + bboxes[:, 2])
+    y2 = np.max(bboxes[:, 1] + bboxes[:, 3])
+    union_bbox_center = [(x1 + x2) / 2, (y1 + y2) / 2]
+    
+    if W < H:
+        # center y
+        left, right = 0, W
+        top = max(0, math.floor(union_bbox_center[1] - image_size / 2))
+        bottom = top + W
+    else:
+        # center x
+        left = max(0, math.floor(union_bbox_center[0] - image_size / 2))
+        right = left + H
+        top, bottom = 0, H
+    crop_bounds = (left, top, right, bottom)
+        
+    img = img.crop(crop_bounds)
+    img = img.resize((image_size, image_size), resample=Image.Resampling.LANCZOS)
+
+    bboxes[:, 0] -= left
+    bboxes[:, 1] -= top
+    bboxes[:, 2:] *= zoom_factor
+    objects["bbox"] = bboxes.tolist()
+    
+    objects["area"] = (bboxes[:, 2] * bboxes[:, 3]).tolist()
+    
+    if "mask" in objects:
+        for i, mask in enumerate(objects["mask"]):
+            mask = mask[top:bottom, left:right] 
+            mask = zoom(mask, zoom_factor, order=0)
+            objects["mask"][i] = mask
+            
+    return example
+
+
+def rotation_augment(example: dict, **kwargs):
     # TODO: make this work with multiple objects
     if "mask" in example["objects"]:
         mask = example["objects"]["mask"][0]
@@ -116,7 +166,6 @@ def rotation_augment(example: dict, last: bool, **kwargs):
     # Get final crop dimensions
     W_crop, H_crop, dx, dy = rotate_crop_bounds(W, H, math.radians(angle))
     W_crop, H_crop = round(W_crop), round(H_crop)
-    print(W_crop, H_crop, dx, dy)
     
     # Get offset 
     bbox = mask2xywh(mask_rot)
@@ -147,17 +196,16 @@ def rotation_augment(example: dict, last: bool, **kwargs):
     
     img_crop = img_rot.crop((col_start, row_start, col_end, row_end))
     mask_crop = mask_rot[row_slice, col_slice]
-    
-    example["image"] = img_crop
-    example["height"] = row_end - row_start
-    example["width"] = col_end - col_start
-    
     cropped_bbox = mask2xywh(mask_crop)
-    assert cropped_bbox
-    x_crop, y_crop, w_crop, h_crop = cropped_bbox
-    example["objects"]["area"].append(w_crop * h_crop)
-    example["objects"]["bbox"] = cropped_bbox
-    example["objects"].setdefault("mask", []).append(mask_crop)
+    if cropped_bbox is not None:
+        example["image"] = img_crop
+        example["height"] = row_end - row_start
+        example["width"] = col_end - col_start
+        
+        x_crop, y_crop, w_crop, h_crop = cropped_bbox
+        example["objects"]["area"][0] = w_crop * h_crop
+        example["objects"]["bbox"][0] = cropped_bbox
+        example["objects"].setdefault("mask", []).append(mask_crop)
     
     return example
 

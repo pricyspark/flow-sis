@@ -1,4 +1,9 @@
-from .augment import TransformDataset, AugmentationPipeline
+from .augment import (
+    TransformDataset, 
+    AugmentationPipeline, 
+    roi_square, 
+    rotation_augment,
+)
 from .common import get_device, set_seed
 from .training import (
     build_autocast_context,
@@ -18,4 +23,6 @@ __all__ = [
     "resolve_resume_checkpoint",
     "save_checkpoint",
     "set_seed",
+    "roi_square",
+    "rotation_augment",
 ]

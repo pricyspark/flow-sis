@@ -19,6 +19,8 @@ from flowsis.utils import (
     resolve_resume_checkpoint,
     save_checkpoint,
     set_seed,
+    roi_square,
+    rotation_augment,
 )
 
 
@@ -445,9 +447,15 @@ def main() -> None:
         device=device,
     )
 
+    augments = [rotation_augment, roi_square]
+    augment_kwargs = [
+        {"pad": 1},
+        {"image_size": 640},
+    ]
+
     transform_dataset = TransformDataset(
         dataset[args.train_split],
-        AugmentationPipeline([])
+        AugmentationPipeline(augments, augment_kwargs),
     )
     transform_dataset = cast(Dataset, transform_dataset) # To calm type checker on HF Dataset and torch Dataset
 
