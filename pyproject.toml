@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "flowsis"
+version = "0.1.0"
+description = "FlowSIS training and inference code"
+readme = "README.md"
+requires-python = ">=3.10"
+
+[tool.setuptools.packages.find]
+include = ["flowsis*"]
+
+[project.scripts]
+flowsis-live-rtdetrv2 = "flowsis.cli.deploy.live_rtdetrv2:main"
+flowsis-train-rtdetrv2 = "flowsis.cli.train.train_rtdetrv2:main"
+flowsis-visualize-detection-dataset = "flowsis.cli.data.visualize_hf_detection_dataset:main"

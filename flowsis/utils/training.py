@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import random
 from contextlib import nullcontext
 from dataclasses import dataclass
@@ -10,8 +8,6 @@ import numpy as np
 import torch
 from torch.amp.grad_scaler import GradScaler # Ugly and not what docs do, but type checker throw false positive otherwise
 from torch.amp.autocast_mode import autocast # Ugly and not what docs do, but type checker throw false positive otherwise
-
-from flowsis.rtdetrv2 import RTDetrV2
 
 
 @dataclass
@@ -71,7 +67,7 @@ def resolve_resume_checkpoint(resume_from: str | Path | None) -> Path | None:
 
 
 def save_checkpoint(
-    model: RTDetrV2,
+    model,
     optimizer: torch.optim.Optimizer,
     scheduler: torch.optim.lr_scheduler.LRScheduler,
     output_dir: Path,

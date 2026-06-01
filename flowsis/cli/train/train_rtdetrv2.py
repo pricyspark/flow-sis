@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import argparse
 import sys
 from pathlib import Path
@@ -10,11 +8,6 @@ from datasets import ClassLabel, Dataset, DatasetDict, Image as HFImage, Iterabl
 from torch.optim import AdamW
 from torch.utils.data import DataLoader
 from transformers import get_scheduler
-
-ROOT = Path(__file__).resolve().parents[2]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-
 from flowsis.rtdetrv2 import RTDetrV2
 from flowsis.utils import (
     AugmentationPipeline,
