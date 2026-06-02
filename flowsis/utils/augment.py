@@ -95,11 +95,11 @@ def roi_square(example: dict, **kwargs):
     
     img: Image.Image = example["image"]
     W, H = img.size
-    zoom_factor = image_size / min(W, H)
+    crop_size = min(W, H)
+    zoom_factor = image_size / crop_size
     
     objects = example["objects"]
     bboxes = np.array(objects["bbox"], dtype=float)
-    #print(example["objects"]["bbox"])
     x1 = np.min(bboxes[:, 0])
     y1 = np.min(bboxes[:, 1])
     
@@ -108,26 +108,34 @@ def roi_square(example: dict, **kwargs):
     union_bbox_center = [(x1 + x2) / 2, (y1 + y2) / 2]
     
     if W < H:
-        # center y
-        left, right = 0, W
-        top = max(0, math.floor(union_bbox_center[1] - image_size / 2))
-        bottom = top + W
+        left = 0
+        right = crop_size
+        max_top = H - crop_size
+        top = int(np.clip(round(union_bbox_center[1] - crop_size / 2), 0, max_top))
+        bottom = top + crop_size
     else:
-        # center x
-        left = max(0, math.floor(union_bbox_center[0] - image_size / 2))
-        right = left + H
-        top, bottom = 0, H
+        top = 0
+        bottom = crop_size
+        max_left = W - crop_size
+        left = int(np.clip(round(union_bbox_center[0] - crop_size / 2), 0, max_left))
+        right = left + crop_size
     crop_bounds = (left, top, right, bottom)
         
     img = img.crop(crop_bounds)
     img = img.resize((image_size, image_size), resample=Image.Resampling.LANCZOS)
 
-    bboxes[:, 0] -= left
-    bboxes[:, 1] -= top
-    bboxes[:, 2:] *= zoom_factor
+    x1 = np.clip(bboxes[:, 0] - left, 0, crop_size)
+    y1 = np.clip(bboxes[:, 1] - top, 0, crop_size)
+    x2 = np.clip(bboxes[:, 0] + bboxes[:, 2] - left, 0, crop_size)
+    y2 = np.clip(bboxes[:, 1] + bboxes[:, 3] - top, 0, crop_size)
+
+    bboxes = np.stack((x1, y1, x2 - x1, y2 - y1), axis=1) * zoom_factor
     objects["bbox"] = bboxes.tolist()
     
     objects["area"] = (bboxes[:, 2] * bboxes[:, 3]).tolist()
+    example["image"] = img
+    example["width"] = image_size
+    example["height"] = image_size
     
     if "mask" in objects:
         for i, mask in enumerate(objects["mask"]):
