@@ -76,6 +76,7 @@ class RTDetrV2(nn.Module):
         )
         config = RTDetrV2Config.from_pretrained(
             resolved_source, 
+            cache_dir=cache_dir,
             local_files_only=local_files_only,
         )
 
@@ -89,11 +90,13 @@ class RTDetrV2(nn.Module):
 
         self.processor = RTDetrImageProcessor.from_pretrained(
             resolved_source,
+            cache_dir=cache_dir,
             local_files_only=local_files_only,
         )
         self.model = RTDetrV2ForObjectDetection.from_pretrained(
             resolved_source,
             config=config,
+            cache_dir=cache_dir,
             ignore_mismatched_sizes=num_labels is not None,
             local_files_only=local_files_only,
         )
