@@ -11,41 +11,7 @@ from transformers import RTDetrImageProcessor, RTDetrV2Config, RTDetrV2ForObject
 from transformers.utils.generic import ModelOutput
 from transformers.image_utils import ImageInput
 from transformers.feature_extraction_utils import BatchFeature
-
-
-def _resolve_pretrained_source(model_name_or_path: str, cache_dir: str) -> tuple[str, bool]:
-    """Resolve whether pretrained source is local or must be installed.
-
-    Args:
-        model_name_or_path (str): _description_
-        cache_dir (str): _description_
-
-    Returns:
-        tuple[str, bool]: _description_
-    """
-    path = Path(model_name_or_path)
-    if path.exists():
-        return str(path), True
-
-    repo_dir = Path(cache_dir) / f"models--{model_name_or_path.replace('/', '--')}"
-    if not repo_dir.exists():
-        return model_name_or_path, False
-
-    refs_dir = repo_dir / "refs"
-    if refs_dir.exists():
-        for ref_file in refs_dir.iterdir():
-            commit = ref_file.read_text().strip()
-            snapshot_dir = repo_dir / "snapshots" / commit
-            if snapshot_dir.exists():
-                return str(snapshot_dir), True
-
-    snapshots_dir = repo_dir / "snapshots"
-    if snapshots_dir.exists():
-        snapshots = sorted(snapshot for snapshot in snapshots_dir.iterdir() if snapshot.is_dir())
-        if snapshots:
-            return str(snapshots[-1]), True
-
-    return model_name_or_path, False
+from flowsis.utils import resolve_pretrained_source
 
 
 def _infer_single_image_size(image: Image.Image | np.ndarray | torch.Tensor) -> tuple[int, int]:
@@ -104,8 +70,14 @@ class RTDetrV2(nn.Module):
     ) -> None:
         super().__init__()
 
-        resolved_source, local_files_only = _resolve_pretrained_source(model_name_or_path, cache_dir)
-        config = RTDetrV2Config.from_pretrained(resolved_source, local_files_only=local_files_only)
+        resolved_source, local_files_only = resolve_pretrained_source(
+            model_name_or_path, 
+            cache_dir,
+        )
+        config = RTDetrV2Config.from_pretrained(
+            resolved_source, 
+            local_files_only=local_files_only,
+        )
 
         if num_labels is not None:
             config.num_labels = int(num_labels)
@@ -145,7 +117,10 @@ class RTDetrV2(nn.Module):
 
         processor_kwargs: dict[str, Any] = {"return_tensors": "pt"}
         if image_size is not None:
-            processor_kwargs["size"] = {"shortest_edge": image_size, "longest_edge": image_size}
+            processor_kwargs["size"] = {
+                "shortest_edge": image_size, 
+                "longest_edge": image_size,
+            }
             processor_kwargs["do_pad"] = True
             processor_kwargs["pad_size"] = {"height": image_size, "width": image_size}
 
@@ -154,7 +129,9 @@ class RTDetrV2(nn.Module):
         else:
             batch = self.processor.preprocess(
                 images=image_input,
-                annotations=[self._normalize_annotation(annotation) for annotation in annotations],
+                annotations=[
+                    self._normalize_annotation(annotation) 
+                    for annotation in annotations],
                 **processor_kwargs,
             )
             
@@ -194,7 +171,7 @@ class RTDetrV2(nn.Module):
         images: Image.Image | np.ndarray | torch.Tensor | Sequence[Image.Image | np.ndarray | torch.Tensor],
         *,
         image_size: int | None = None,
-        threshold: float = 0.5,
+        threshold: float = 0.1,
         return_outputs: bool = False,
     ) -> RTDetrV2InferenceResult:
         was_training = self.training
