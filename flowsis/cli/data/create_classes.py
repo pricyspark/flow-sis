@@ -32,12 +32,14 @@ def create_json(
         header = next(reader)
         for row in reader:
             components = [
-                row[col] 
-                if isinstance(col, int)
-                else row[header.index(col)]
-                for col in class_cols]
+                value
+                for col in class_cols
+                if (value := row[col] if isinstance(col, int) else row[header.index(col)])
+            ]
             
-            if not all(components):
+            # TODO: cast to tuple for easy comparison, raise warning or error if different rows map to same string
+            
+            if not components:
                 warnings.warn(f"Video {row[0]} has empty cells. Skipping.")
                 continue
             
