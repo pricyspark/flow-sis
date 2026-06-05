@@ -7,8 +7,8 @@ from collections.abc import Iterable
 import argparse
 
 
-DEFAULT_CSV_PATH = Path("data/raw/video_manifest.csv")
-DEFAULT_JSON_PATH = Path("data/raw/classes.json")
+DEFAULT_CSV_PATH = Path("data/manifests/video_manifest.csv")
+DEFAULT_JSON_PATH = Path("data/manifests/classes.json")
 DEFAULT_COLS = ["ToolStyle", "Class"]
 
 def parse_args() -> argparse.Namespace:

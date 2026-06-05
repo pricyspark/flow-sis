@@ -13,6 +13,7 @@ import argparse
 
 DEFAULT_VIDEO_DIR = Path("data/raw")
 DEFAULT_FRAME_DIR = Path("data/frames")
+DEFAULT_MANIFEST_DIR = Path("data/manifests")
 
 
 @dataclass
@@ -40,6 +41,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Sample keyframes from videos using pHash and agglomerative clustering.")
     parser.add_argument("--video_dir", type=Path, default=DEFAULT_VIDEO_DIR)
     parser.add_argument("--frame_dir", type=Path, default=DEFAULT_FRAME_DIR)
+    parser.add_argument("--manifest_dir", type=Path, default=DEFAULT_MANIFEST_DIR)
     return parser.parse_args()
 
 
@@ -296,6 +298,7 @@ def sample_video(
 def save_samples(
     samples: list[ClusterSample],
     output_dir: Path,
+    manifest_dir: Path,
     img_ext: str = ".jpg",
     jpeg_quality: int = 95,
 ) -> None:
@@ -351,7 +354,7 @@ def save_samples(
             )
         )
         
-    manifest_path = output_dir / "frame_manifest.csv"
+    manifest_path = manifest_dir / "frame_manifest.csv"
     manifest_path.write_text("\n".join(manifest_rows), encoding="utf-8")
     
     
@@ -359,6 +362,7 @@ def main():
     args = parse_args()
     assert not args.video_dir.is_file()
     assert not args.frame_dir.is_file()
+    assert not args.manifest_dir.is_file()
     
     # This may get pretty large if there's lots of data, maybe periodically flush buffer to file
     all_samples = []
@@ -369,7 +373,7 @@ def main():
         end = time.perf_counter()
         print(f"Sampled {len(samples)} frames from {video.name} in {end - start:.1f} seconds")
     
-    save_samples(all_samples, args.frame_dir)
+    save_samples(all_samples, args.frame_dir, args.manifest_dir)
     
 if __name__ == "__main__":
     main()

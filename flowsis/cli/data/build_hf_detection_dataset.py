@@ -9,9 +9,9 @@ from datasets import ClassLabel, Dataset, DatasetDict, Features, Image, Sequence
 from numpy.typing import NDArray
 
 
-DEFAULT_MANIFEST_PATH = Path("data/frames/frame_manifest.csv")
+DEFAULT_MANIFEST_PATH = Path("data/manifests/frame_manifest.csv")
 DEFAULT_BOXES_DIR = Path("data/boxes")
-DEFAULT_CLASSES_PATH = Path("data/raw/classes.json")
+DEFAULT_CLASSES_PATH = Path("data/manifests/classes.json")
 DEFAULT_OUTPUT_PATH = Path("data/dataset")
 
 
