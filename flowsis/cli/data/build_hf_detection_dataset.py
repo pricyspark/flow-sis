@@ -1,12 +1,12 @@
-import argparse
 import csv
-import json
 import shutil
-from pathlib import Path
-
+import argparse
 import numpy as np
-from datasets import ClassLabel, Dataset, DatasetDict, Features, Image, Sequence, Value
+from pathlib import Path
 from numpy.typing import NDArray
+from datasets import ClassLabel, Dataset, DatasetDict, Features, Image, Sequence, Value
+
+from flowsis.utils import load_classes
 
 
 DEFAULT_MANIFEST_PATH = Path("data/manifests/frame_manifest.csv")
@@ -29,21 +29,6 @@ def load_boxes(boxes_dir: Path) -> dict[str, NDArray[np.float32]]:
     for file in sorted(boxes_dir.glob("*.npy")):
         bboxes[file.stem] = np.load(file).astype(np.float32, copy=False)
     return bboxes
-
-
-def load_classes(
-    classes_path: Path,
-) -> tuple[
-    dict[str, str],
-    dict[str, int],
-    dict[int, str],
-]:
-    with classes_path.open() as file:
-        classes = json.load(file)
-
-    vid2label, label2id, raw_id2label = classes
-    id2label = {int(key): value for key, value in raw_id2label.items()}
-    return vid2label, label2id, id2label
 
 
 def build_dataset(

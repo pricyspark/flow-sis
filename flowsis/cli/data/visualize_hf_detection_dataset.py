@@ -2,9 +2,8 @@ import argparse
 import math
 import random
 from pathlib import Path
-
-from datasets import ClassLabel, Dataset, DatasetDict, IterableDatasetDict, load_from_disk
 from PIL import Image, ImageDraw, ImageFont
+from datasets import ClassLabel, Dataset, DatasetDict, IterableDatasetDict, load_from_disk
 
 
 DEFAULT_DATASET_PATH = Path("data/dataset")

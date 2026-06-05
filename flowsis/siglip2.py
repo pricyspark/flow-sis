@@ -1,11 +1,10 @@
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from typing import Literal
+from collections.abc import Sequence
 from flowsis.utils import resolve_pretrained_source
 from transformers import Siglip2TextModel, Siglip2TextConfig, Siglip2Tokenizer
-from collections.abc import Sequence
-from typing import Literal
 
 
 class SigLIP2(nn.Module):

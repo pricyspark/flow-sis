@@ -1,14 +1,14 @@
 import cv2
+import time
+import argparse
 import imagehash
 import numpy as np
 from PIL import Image
 from pathlib import Path
 from numpy.typing import NDArray
 from dataclasses import dataclass
-from sklearn.cluster import AgglomerativeClustering
 from typing import Optional, Literal
-import time
-import argparse
+from sklearn.cluster import AgglomerativeClustering
 
 
 DEFAULT_VIDEO_DIR = Path("data/raw")

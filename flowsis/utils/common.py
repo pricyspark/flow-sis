@@ -1,6 +1,7 @@
-import numpy as np
-import random
+import json
 import torch
+import random
+import numpy as np
 from pathlib import Path
 
 
@@ -13,8 +14,10 @@ def set_seed(seed: int) -> None:
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
 
+
 def get_device() -> torch.device:
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 
 def resolve_pretrained_source(model_name_or_path: str, cache_dir: str) -> tuple[str, bool]:
     """Resolve whether pretrained source is local or must be installed.
@@ -49,3 +52,17 @@ def resolve_pretrained_source(model_name_or_path: str, cache_dir: str) -> tuple[
             return str(snapshots[-1]), True
 
     return model_name_or_path, False
+
+def load_classes(
+    classes_path: Path,
+) -> tuple[
+    dict[str, str],
+    dict[str, int],
+    dict[int, str],
+]:
+    with classes_path.open() as file:
+        classes = json.load(file)
+
+    vid2label, label2id, raw_id2label = classes
+    id2label = {int(key): value for key, value in raw_id2label.items()}
+    return vid2label, label2id, id2label

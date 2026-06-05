@@ -1,17 +1,11 @@
+import math
+import torch
+import numpy as np
+import matplotlib.pyplot as plt
+from PIL import Image
 from pathlib import Path
 from dataclasses import dataclass
-import math
-import sys
-
-import matplotlib.pyplot as plt
-import numpy as np
-import torch
-from PIL import Image
 from transformers import Sam3VideoModel, Sam3VideoProcessor
-
-# Allow `python flowsis/cli/annotate_keyframes.py` to resolve the package root.
-if __package__ in {None, ""}:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from flowsis.utils import get_device
 

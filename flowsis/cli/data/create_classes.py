@@ -1,10 +1,9 @@
 import csv
 import json
-import os
+import argparse
 import warnings
 from pathlib import Path
 from collections.abc import Iterable
-import argparse
 
 
 DEFAULT_CSV_PATH = Path("data/manifests/video_manifest.csv")

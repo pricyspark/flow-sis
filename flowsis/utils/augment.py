@@ -1,14 +1,13 @@
+import math
 import random
 import numpy as np
-import torch
-from torch.utils.data import Dataset
-from collections.abc import Iterable, Callable
-from pathlib import Path
-from numpy.typing import NDArray, ArrayLike
 from PIL import Image
-import math
 from typing import Any
+from pathlib import Path
 from scipy.ndimage import zoom
+from torch.utils.data import Dataset
+from numpy.typing import NDArray, ArrayLike
+from collections.abc import Iterable, Callable
 
 
 DEFAULT_MASKS_DIR = Path("data/masks")

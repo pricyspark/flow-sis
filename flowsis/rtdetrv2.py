@@ -1,20 +1,21 @@
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Any, Iterable, cast
-from collections.abc import Sequence
-
-import numpy as np
 import torch
 import torch.nn as nn
+import numpy as np
 from PIL import Image
-from transformers import RTDetrImageProcessor, RTDetrV2Config, RTDetrV2ForObjectDetection
-from transformers.utils.generic import ModelOutput
+from pathlib import Path
+from numpy.typing import NDArray
+from dataclasses import dataclass
+from collections.abc import Sequence
+from typing import Any, Iterable, cast
 from transformers.image_utils import ImageInput
+from transformers.utils.generic import ModelOutput
 from transformers.feature_extraction_utils import BatchFeature
+from transformers import RTDetrImageProcessor, RTDetrV2Config, RTDetrV2ForObjectDetection
+
 from flowsis.utils import resolve_pretrained_source
 
 
-def _infer_single_image_size(image: Image.Image | np.ndarray | torch.Tensor) -> tuple[int, int]:
+def _infer_single_image_size(image: Image.Image | NDArray | torch.Tensor) -> tuple[int, int]:
     if isinstance(image, Image.Image):
         width, height = image.size
         return height, width
@@ -110,7 +111,7 @@ class RTDetrV2(nn.Module):
 
     def preprocess(
         self,
-        images: Image.Image | np.ndarray | torch.Tensor | Sequence[Image.Image | np.ndarray | torch.Tensor],
+        images: Image.Image | NDArray | torch.Tensor | Sequence[Image.Image | NDArray | torch.Tensor],
         annotations: Sequence[dict[str, Any]] | None = None,
         *,
         image_size: int | None = 640,
@@ -149,7 +150,7 @@ class RTDetrV2(nn.Module):
 
     def forward(
         self,
-        images: Image.Image | np.ndarray | torch.Tensor | Sequence[Image.Image | np.ndarray | torch.Tensor],
+        images: Image.Image | NDArray | torch.Tensor | Sequence[Image.Image | NDArray | torch.Tensor],
         annotations: Sequence[dict[str, Any]] | None = None,
         *,
         image_size: int | None = None,
@@ -171,7 +172,7 @@ class RTDetrV2(nn.Module):
     @torch.no_grad()
     def infer(
         self,
-        images: Image.Image | np.ndarray | torch.Tensor | Sequence[Image.Image | np.ndarray | torch.Tensor],
+        images: Image.Image | NDArray | torch.Tensor | Sequence[Image.Image | NDArray | torch.Tensor],
         *,
         image_size: int | None = None,
         threshold: float = 0.1,

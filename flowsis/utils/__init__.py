@@ -4,7 +4,7 @@ from .augment import (
     roi_square, 
     rotation_augment,
 )
-from .common import get_device, set_seed, resolve_pretrained_source
+from .common import get_device, set_seed, resolve_pretrained_source, load_classes
 from .training import (
     build_autocast_context,
     build_grad_scaler,
@@ -26,4 +26,5 @@ __all__ = [
     "roi_square",
     "rotation_augment",
     "resolve_pretrained_source",
+    "load_classes",
 ]

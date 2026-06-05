@@ -1,11 +1,8 @@
-import random
-from contextlib import nullcontext
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Any
-
-import numpy as np
 import torch
+from typing import Any
+from pathlib import Path
+from dataclasses import dataclass
+from contextlib import nullcontext
 from torch.amp.grad_scaler import GradScaler # Ugly and not what docs do, but type checker throw false positive otherwise
 from torch.amp.autocast_mode import autocast # Ugly and not what docs do, but type checker throw false positive otherwise
 

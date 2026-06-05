@@ -1,13 +1,21 @@
+import torch
 import argparse
-import sys
 from pathlib import Path
 from typing import Any, cast
-
-import torch
-from datasets import ClassLabel, Dataset, DatasetDict, Image as HFImage, IterableDataset, IterableDatasetDict, load_dataset, load_from_disk
 from torch.optim import AdamW
 from torch.utils.data import DataLoader
 from transformers import get_scheduler
+from datasets import (
+    ClassLabel, 
+    Dataset, 
+    DatasetDict, 
+    Image as HFImage, 
+    IterableDataset, 
+    IterableDatasetDict, 
+    load_dataset, 
+    load_from_disk,
+)
+
 from flowsis.rtdetrv2 import RTDetrV2
 from flowsis.utils import (
     AugmentationPipeline,
@@ -50,7 +58,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--run_inference_example", action="store_true")
     parser.add_argument("--inference_split", type=str, default="validation")
     parser.add_argument("--inference_index", type=int, default=0)
-    parser.add_argument("--score_threshold", type=float, default=0.3)
+    parser.add_argument("--score_threshold", type=float, default=0.1)
+    parser.add_argument(
+        "--use_rotation_augment",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Apply mask-guided rotation augmentation during training.",
+    )
+    parser.add_argument(
+        "--use_roi_square",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Apply object-centered square cropping during training.",
+    )
     return parser.parse_args()
 
 
@@ -109,7 +129,9 @@ def load_label_metadata(
     dataset: DatasetDict | IterableDatasetDict,
     split_name: str,
 ) -> tuple[int, dict[int, str]]:
-    category_feature = dataset[split_name].features["objects"]["category"]
+    split_features = dataset[split_name].features
+    assert split_features is not None
+    category_feature = split_features["objects"]["category"]
     if hasattr(category_feature, "feature"):
         category_feature = category_feature.feature
     if not isinstance(category_feature, ClassLabel):
@@ -447,20 +469,34 @@ def main() -> None:
         device=device,
     )
 
-    augments = [rotation_augment, roi_square]
-    augment_kwargs = [
-        {"pad": 1},
-        {"image_size": 640},
-    ]
+    augments = []
+    augment_kwargs = []
+    if args.use_rotation_augment:
+        augments.append(rotation_augment)
+        augment_kwargs.append({"pad": 1})
+    if args.use_roi_square:
+        augments.append(roi_square)
+        augment_kwargs.append({"image_size": args.image_size})
 
-    transform_dataset = TransformDataset(
-        dataset[args.train_split],
-        AugmentationPipeline(augments, augment_kwargs),
+    if augments:
+        train_split_dataset = TransformDataset(
+            dataset[args.train_split],
+            AugmentationPipeline(augments, augment_kwargs),
+        )
+        train_split_dataset = cast(Dataset, train_split_dataset) # To calm type checker on HF Dataset and torch Dataset
+    else:
+        train_split_dataset = cast(Dataset, dataset[args.train_split])
+
+    log_event(
+        "train_augmentations",
+        {
+            "use_rotation_augment": args.use_rotation_augment,
+            "use_roi_square": args.use_roi_square,
+        },
     )
-    transform_dataset = cast(Dataset, transform_dataset) # To calm type checker on HF Dataset and torch Dataset
 
     train_loader = build_dataloader(
-        split_dataset=transform_dataset,
+        split_dataset=train_split_dataset,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
         shuffle=not args.overfit_single_batch,
