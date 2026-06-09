@@ -1,10 +1,12 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import warnings
 from typing import Literal
 from collections.abc import Sequence
-from flowsis.utils import resolve_pretrained_source
-from transformers import Siglip2TextModel, Siglip2TextConfig, Siglip2Tokenizer
+from transformers import SiglipTextConfig, SiglipTextModel, Siglip2Tokenizer
+
+from .common import resolve_pretrained_source
 
 
 class SigLIP2(nn.Module):
@@ -34,7 +36,10 @@ class SigLIP2(nn.Module):
             cache_dir,
         )
         
-        config = Siglip2TextConfig.from_pretrained(
+        # The SigLIP2 checkpoint's text_config still identifies itself as
+        # `siglip_text_model`, so load the text tower with the matching class
+        # to avoid a config/model-type mismatch warning in transformers.
+        config = SiglipTextConfig.from_pretrained(
             resolved_source,
             cache_dir=cache_dir,
             local_files_only=local_files_only,
@@ -49,7 +54,7 @@ class SigLIP2(nn.Module):
             local_files_only=local_files_only,
         )
         
-        self.model = Siglip2TextModel.from_pretrained(
+        self.model = SiglipTextModel.from_pretrained(
             resolved_source,
             config=config,
             cache_dir=cache_dir,
@@ -78,6 +83,21 @@ class SigLIP2(nn.Module):
         
         device = self.device
         
+        raw_tokens = self.tokenizer(
+            batch,
+            padding=False,
+            truncation=False,
+            add_special_tokens=True,
+        )
+
+        for i, input_ids in enumerate(raw_tokens["input_ids"]):
+            if len(input_ids) > self.max_length:
+                warnings.warn(
+                    f"Input {i} has {len(input_ids)} tokens, "
+                    f"which exceeds max_length={self.max_length}. "
+                    f"It will be truncated by {len(input_ids) - self.max_length} tokens."
+                )
+
         tokens = self.tokenizer(
             batch,
             padding="max_length",

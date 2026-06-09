@@ -12,6 +12,7 @@ pseudo.txt
 *.csv
 *.npy
 *.npz
+*.pt
 data/**/*.json
 
 # Downloaded models

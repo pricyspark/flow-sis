@@ -12,7 +12,7 @@ from transformers.utils.generic import ModelOutput
 from transformers.feature_extraction_utils import BatchFeature
 from transformers import RTDetrImageProcessor, RTDetrV2Config, RTDetrV2ForObjectDetection
 
-from flowsis.utils import resolve_pretrained_source
+from .common import resolve_pretrained_source
 
 
 def _infer_single_image_size(image: Image.Image | NDArray | torch.Tensor) -> tuple[int, int]:

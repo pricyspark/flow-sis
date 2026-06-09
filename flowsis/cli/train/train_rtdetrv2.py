@@ -16,10 +16,8 @@ from datasets import (
     load_from_disk,
 )
 
-from flowsis.rtdetrv2 import RTDetrV2
+from flowsis.pretrained.rtdetrv2 import RTDetrV2
 from flowsis.utils import (
-    AugmentationPipeline,
-    TransformDataset,
     build_autocast_context,
     build_grad_scaler,
     get_device,
@@ -27,7 +25,11 @@ from flowsis.utils import (
     resolve_resume_checkpoint,
     save_checkpoint,
     set_seed,
-    roi_square,
+)
+from flowsis.data import (
+    AugmentationPipeline, 
+    TransformDataset, 
+    roi_square_augment, 
     rotation_augment,
 )
 
@@ -66,7 +68,7 @@ def parse_args() -> argparse.Namespace:
         help="Apply mask-guided rotation augmentation during training.",
     )
     parser.add_argument(
-        "--use_roi_square",
+        "--use_roi_square_augment",
         action=argparse.BooleanOptionalAction,
         default=True,
         help="Apply object-centered square cropping during training.",
@@ -474,8 +476,8 @@ def main() -> None:
     if args.use_rotation_augment:
         augments.append(rotation_augment)
         augment_kwargs.append({"pad": 1})
-    if args.use_roi_square:
-        augments.append(roi_square)
+    if args.use_roi_square_augment:
+        augments.append(roi_square_augment)
         augment_kwargs.append({"image_size": args.image_size})
 
     if augments:
@@ -491,7 +493,7 @@ def main() -> None:
         "train_augmentations",
         {
             "use_rotation_augment": args.use_rotation_augment,
-            "use_roi_square": args.use_roi_square,
+            "use_roi_square_augment": args.use_roi_square_augment,
         },
     )
 

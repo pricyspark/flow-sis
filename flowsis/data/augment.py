@@ -9,18 +9,10 @@ from torch.utils.data import Dataset
 from numpy.typing import NDArray, ArrayLike
 from collections.abc import Iterable, Callable
 
+from .masks import load_mask, mask2xywh
+
 
 DEFAULT_MASKS_DIR = Path("data/masks")
-
-
-def load_binary(path) -> NDArray[np.bool_]: # TODO: this should go in a general utils file
-    data = np.load(path)
-    packed = data["packed"]
-    shape = tuple(data["shape"])
-    n_bits = np.prod(shape)
-    flat = np.unpackbits(packed)[:n_bits]
-    arr = flat.reshape(shape).astype(bool)
-    return arr
 
 
 class TransformDataset(Dataset):
@@ -56,40 +48,9 @@ class AugmentationPipeline:
     
     def append(self, augment: Callable) -> None:
         self.augments.append(augment)
-
-
-def load_mask(example: dict, path=None) -> NDArray[np.bool_]:
-    video_id = example["video_id"]
-    frame_idx = example["frame_idx"]
-    if path is None:
-        path = DEFAULT_MASKS_DIR
-    mask_path = path / f"{video_id}" / f"{frame_idx}.npz"
-    mask = load_binary(mask_path)
-    return mask
-
-
-def mask2xywh(mask: NDArray) -> list[int] | None:
-    rows, cols = np.nonzero(mask)
-    if len(rows) == 0:
-        return None
     
-    x_min = cols.min()
-    x_max = cols.max()
-    y_min = rows.min()
-    y_max = rows.max()
-    
-    width = x_max - x_min + 1
-    height = y_max - y_min + 1
-    
-    return [
-        int(x_min),
-        int(y_min),
-        int(width),
-        int(height),
-    ]
-    
-
-def roi_square(example: dict, **kwargs):
+# TODO: maybe put actual augmentation functions in a separate file from the classes
+def roi_square_augment(example: dict, **kwargs):
     image_size = kwargs["image_size"]
     
     img: Image.Image = example["image"]
@@ -144,7 +105,7 @@ def roi_square(example: dict, **kwargs):
             
     return example
 
-
+# TODO: maybe put rotation in a separate file, since it's so big
 def rotation_augment(example: dict, **kwargs):
     # TODO: make this work with multiple objects
     if "mask" in example["objects"]:

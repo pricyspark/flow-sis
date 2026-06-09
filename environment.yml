@@ -15,5 +15,7 @@ dependencies:
   - scikit-learn
   - scipy
   - jupyter
+  - openai
+  - pydantic
   - pip:
-    - kernels
+    - kernels==0.14.1
