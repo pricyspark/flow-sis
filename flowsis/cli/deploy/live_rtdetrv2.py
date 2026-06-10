@@ -162,14 +162,15 @@ def main() -> None:
                 break
 
             frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-            square_frame = crop_center_square(frame_rgb)
+            square_rgb = crop_center_square(frame_rgb)
+            square_bgr = crop_center_square(frame_bgr)
             start_time = time.perf_counter()
             print(frame_rgb.shape)
-            inference = model.infer(square_frame, image_size=args.image_size, threshold=args.threshold)
+            inference = model.infer(square_rgb, image_size=args.image_size, threshold=args.threshold)
             inference_ms = (time.perf_counter() - start_time) * 1000.0
 
             rendered_frame = draw_detections(
-                square_frame,
+                square_bgr,
                 inference.detections[0],
                 id2label=id2label,
                 inference_ms=inference_ms,
