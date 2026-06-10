@@ -1,20 +1,74 @@
-from collections.abc import Sequence
+from collections.abc import Iterable
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 
-def _to_image_tokens(image_features: torch.Tensor) -> tuple[torch.Tensor, tuple[int, int]]:
+def _build_2d_sincos_pos_encoding(
+    height: int,
+    width: int,
+    channels: int,
+    *,
+    device: torch.device,
+    dtype: torch.dtype,
+) -> torch.Tensor:
+    if channels % 4 != 0:
+        raise ValueError(
+            "2D sinusoidal positional encoding requires channels divisible by 4, "
+            f"but received channels={channels}."
+        )
+        
+    if height <= 0 or width <= 0:
+        raise ValueError(f"height and width must be positive, got {height=} and {width=}.")
+    if channels <= 0:
+        raise ValueError(f"channels must be positive, got {channels=}.")
+
+    quarter_channels = channels // 4
+    frequencies = torch.arange(quarter_channels, device=device, dtype=torch.float32)
+    frequencies = 1.0 / (10000 ** (frequencies / quarter_channels))
+    
+    y_coords = torch.arange(height, device=device, dtype=torch.float32)
+    x_coords = torch.arange(width, device=device, dtype=torch.float32)
+
+    y_angles = y_coords[:, None] * frequencies[None, :]
+    x_angles = x_coords[:, None] * frequencies[None, :]
+
+    y_encoding = torch.cat([y_angles.sin(), y_angles.cos()], dim=1)
+    x_encoding = torch.cat([x_angles.sin(), x_angles.cos()], dim=1)
+
+    y_encoding = y_encoding[:, None, :].expand(height, width, channels // 2)
+    x_encoding = x_encoding[None, :, :].expand(height, width, channels // 2)
+    
+    positional_encoding = torch.cat([y_encoding, x_encoding], dim=-1)
+    positional_encoding = positional_encoding.reshape(1, height * width, channels)
+    
+    return positional_encoding.to(dtype=dtype)
+
+
+def _to_image_tokens(
+    image_features: torch.Tensor,
+    *,
+    add_positional_encoding: bool = False,
+) -> tuple[torch.Tensor, tuple[int, int], torch.Tensor | None]:
     if image_features.ndim != 4:
         raise ValueError(
             "Expected image features with shape [B, C, H, W], "
             f"but received {tuple(image_features.shape)}."
         )
 
-    _, _, height, width = image_features.shape
+    _, channels, height, width = image_features.shape
     tokens = image_features.flatten(2).transpose(1, 2)
-    return tokens, (height, width)
+    positional_encoding = None
+    if add_positional_encoding:
+        positional_encoding = _build_2d_sincos_pos_encoding(
+            height,
+            width,
+            channels,
+            device=image_features.device,
+            dtype=image_features.dtype,
+        )
+    return tokens, (height, width), positional_encoding
 
 
 def _to_image_grid(tokens: torch.Tensor, spatial_shape: tuple[int, int]) -> torch.Tensor:
@@ -36,7 +90,7 @@ def _to_image_grid(tokens: torch.Tensor, spatial_shape: tuple[int, int]) -> torc
     return tokens.transpose(1, 2).reshape(batch_size, channels, height, width)
 
 
-def _validate_feature_list(image_features: Sequence[torch.Tensor]) -> list[torch.Tensor]:
+def _validate_feature_list(image_features: Iterable[torch.Tensor]) -> list[torch.Tensor]:
     feature_list = list(image_features)
     if not feature_list:
         raise ValueError("Expected at least one image feature map.")
@@ -124,6 +178,8 @@ class ImageTextFusionBlock(nn.Module):
         image_features: torch.Tensor,
         text_embeddings: torch.Tensor,
         text_padding_mask: torch.Tensor | None = None,
+        *,
+        add_positional_encoding: bool = False,
     ) -> torch.Tensor:
         if text_embeddings.ndim != 3:
             raise ValueError(
@@ -131,20 +187,31 @@ class ImageTextFusionBlock(nn.Module):
                 f"but received {tuple(text_embeddings.shape)}."
             )
 
-        image_tokens, spatial_shape = _to_image_tokens(image_features)
+        image_tokens, spatial_shape, positional_encoding = _to_image_tokens(
+            image_features,
+            add_positional_encoding=add_positional_encoding,
+        )
         normalized_image_tokens = self.image_norm1(image_tokens)
+        image_self_attn_query = normalized_image_tokens
+        image_self_attn_key = normalized_image_tokens
+        if positional_encoding is not None:
+            image_self_attn_query = image_self_attn_query + positional_encoding
+            image_self_attn_key = image_self_attn_key + positional_encoding
+
         self_attention_output, _ = self.self_attention(
-            normalized_image_tokens,
-            normalized_image_tokens,
+            image_self_attn_query,
+            image_self_attn_key,
             normalized_image_tokens,
             need_weights=False,
         )
         image_tokens = image_tokens + self.dropout1(self_attention_output)
 
-        normalized_cross_query = self.image_norm2(image_tokens)
+        image_cross_attn_query = self.image_norm2(image_tokens)
+        if positional_encoding is not None:
+            image_cross_attn_query = image_cross_attn_query + positional_encoding
         normalized_text = self.text_norm(text_embeddings)
         cross_attention_output, _ = self.cross_attention(
-            normalized_cross_query,
+            image_cross_attn_query,
             normalized_text,
             normalized_text,
             key_padding_mask=text_padding_mask,
@@ -174,9 +241,11 @@ class ImageTextFusion(nn.Module):
         dropout: float = 0.1,
         activation: str = "gelu",
         out_channels: int = 1,
+        num_feature_levels: int = 3,
     ) -> None:
         super().__init__()
 
+        self.num_feature_levels = int(num_feature_levels)
         self.blocks = nn.ModuleList(
             [
                 ImageTextFusionBlock(
@@ -189,7 +258,10 @@ class ImageTextFusion(nn.Module):
                 for _ in range(num_layers)
             ]
         )
+        self.level_embedding = nn.Embedding(self.num_feature_levels, d_model)
         self.level_fuse = nn.Sequential(
+            nn.Conv2d(d_model * self.num_feature_levels, d_model, kernel_size=1),
+            _resolve_activation(activation),
             nn.Conv2d(d_model, d_model, kernel_size=3, padding=1),
             _resolve_activation(activation),
         )
@@ -204,35 +276,52 @@ class ImageTextFusion(nn.Module):
         image_features: torch.Tensor,
         text_embeddings: torch.Tensor,
         text_padding_mask: torch.Tensor | None = None,
+        *,
+        level_index: int,
     ) -> torch.Tensor:
-        fused_features = image_features
-        for block in self.blocks:
+        if not 0 <= level_index < self.num_feature_levels:
+            raise ValueError(
+                f"level_index must be in [0, {self.num_feature_levels}), "
+                f"but received {level_index}."
+            )
+
+        level_bias = self.level_embedding.weight[level_index].view(1, -1, 1, 1)
+        fused_features = image_features + level_bias
+        for block_index, block in enumerate(self.blocks):
             fused_features = block(
                 fused_features,
                 text_embeddings,
                 text_padding_mask=text_padding_mask,
+                add_positional_encoding=block_index == 0,
             )
         return fused_features
 
     def _merge_multiscale_features(self, feature_list: Sequence[torch.Tensor]) -> torch.Tensor:
         validated_features = _validate_feature_list(feature_list)
+        if len(validated_features) != self.num_feature_levels:
+            raise ValueError(
+                f"Expected {self.num_feature_levels} feature levels, "
+                f"but received {len(validated_features)}."
+            )
         target_height, target_width = validated_features[0].shape[-2:]
 
-        merged_features = validated_features[0]
+        resized_features = [validated_features[0]]
         for feature_map in validated_features[1:]:
-            merged_features = merged_features + F.interpolate(
+            resized_features.append(
+                F.interpolate(
                 feature_map,
                 size=(target_height, target_width),
                 mode="bilinear",
                 align_corners=False,
             )
+            )
 
-        merged_features = merged_features / len(validated_features)
+        merged_features = torch.cat(resized_features, dim=1)
         return self.level_fuse(merged_features)
 
     def forward(
         self,
-        image_features: torch.Tensor | Sequence[torch.Tensor],
+        image_features: Iterable[torch.Tensor],
         text_embeddings: torch.Tensor,
         text_padding_mask: torch.Tensor | None = None,
         *,
@@ -243,26 +332,15 @@ class ImageTextFusion(nn.Module):
         | tuple[torch.Tensor, torch.Tensor]
         | tuple[list[torch.Tensor], torch.Tensor]
     ):
-        if isinstance(image_features, torch.Tensor):
-            fused_features = self._fuse_single_scale(
-                image_features,
-                text_embeddings,
-                text_padding_mask=text_padding_mask,
-            )
-            if not return_mask_logits:
-                return fused_features
-
-            mask_logits = self.mask_head(fused_features)
-            return fused_features, mask_logits
-
         feature_list = _validate_feature_list(image_features)
         fused_feature_list = [
             self._fuse_single_scale(
                 feature_map,
                 text_embeddings,
                 text_padding_mask=text_padding_mask,
+                level_index=level_index,
             )
-            for feature_map in feature_list
+            for level_index, feature_map in enumerate(feature_list)
         ]
         if not return_mask_logits:
             return fused_feature_list

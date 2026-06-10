@@ -11,6 +11,7 @@ from transformers.image_utils import ImageInput
 from transformers.utils.generic import ModelOutput
 from transformers.feature_extraction_utils import BatchFeature
 from transformers import RTDetrImageProcessor, RTDetrV2Config, RTDetrV2ForObjectDetection
+from transformers.models.rt_detr_v2.modeling_rt_detr_v2 import RTDetrV2ObjectDetectionOutput
 
 from .common import resolve_pretrained_source
 
@@ -43,8 +44,8 @@ class RTDetrV2ForwardResult:
 @dataclass
 class RTDetrV2InferenceResult:
     detections: list[dict[str, torch.Tensor]]
-    encodings: dict[str, Any]
-    outputs: ModelOutput | None = None
+    encodings: Iterable[torch.Tensor]
+    flat_encodings: dict[str, Any] | None
 
 
 class RTDetrV2(nn.Module):
@@ -176,18 +177,19 @@ class RTDetrV2(nn.Module):
         *,
         image_size: int | None = None,
         threshold: float = 0.1,
-        return_outputs: bool = False,
+        flatten_outputs: bool = False,
     ) -> RTDetrV2InferenceResult:
         was_training = self.training
         self.eval()
 
         image_list = list(images) if isinstance(images, Sequence) else [images]
         batch = self.preprocess(image_list, annotations=None, image_size=image_size)
-        outputs = self.model(
+        outputs: RTDetrV2ObjectDetectionOutput = self.model(
             pixel_values=batch["pixel_values"],
             pixel_mask=batch.get("pixel_mask"),
         )
-
+        
+        assert outputs.logits
         target_sizes = torch.tensor(
             [_infer_single_image_size(image) for image in image_list],
             dtype=torch.int64,
@@ -199,14 +201,15 @@ class RTDetrV2(nn.Module):
             target_sizes=target_sizes, # type: ignore[arg-type] It's a HF typing bug
         )
 
-        encodings = self._build_encodings(outputs.encoder_last_hidden_state)
+        encodings = cast(list[torch.Tensor], outputs.encoder_last_hidden_state)
+        
         if was_training:
             self.train()
-
+        
         return RTDetrV2InferenceResult(
             detections=detections,
             encodings=encodings,
-            outputs=outputs if return_outputs else None,
+            flat_encodings=self._flatten_encodings(encodings) if flatten_outputs else None
         )
 
     def save_pretrained(self, output_dir: str | Path) -> None:
@@ -261,7 +264,7 @@ class RTDetrV2(nn.Module):
             "annotations": normalized_annotations,
         }
 
-    def _build_encodings(self, encoder_feature_maps: Iterable[torch.Tensor]) -> dict[str, Any]:
+    def _flatten_encodings(self, encoder_feature_maps: Iterable[torch.Tensor]) -> dict[str, Any]:
         # TODO: check if reshaping is necessary, helpful, or hurtful. It hurts potential downstream convolution but is good for attention
         feature_maps = list(encoder_feature_maps)
         if not feature_maps:
