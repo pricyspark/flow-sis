@@ -189,7 +189,7 @@ class RTDetrV2(nn.Module):
             pixel_mask=batch.get("pixel_mask"),
         )
         
-        assert outputs.logits
+        assert outputs.logits is not None
         target_sizes = torch.tensor(
             [_infer_single_image_size(image) for image in image_list],
             dtype=torch.int64,
