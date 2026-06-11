@@ -1,4 +1,5 @@
 from collections.abc import Iterable
+from typing import Literal
 
 import torch
 import torch.nn as nn
@@ -242,6 +243,7 @@ class ImageTextFusion(nn.Module):
         activation: str = "gelu",
         out_channels: int = 1,
         num_feature_levels: int = 3,
+        pos_encode: Literal["NONE", "FIRST", "SECOND", "ALL"] = "FIRST"
     ) -> None:
         super().__init__()
 
@@ -270,6 +272,9 @@ class ImageTextFusion(nn.Module):
             _resolve_activation(activation),
             nn.Conv2d(d_model, out_channels, kernel_size=1),
         )
+        
+        pos_encode_dict = {"NONE": -1, "FIRST": 0, "SECOND": 1, "ALL": float("inf")}
+        self.pos_encode_blocks = pos_encode_dict[pos_encode]
 
     def _fuse_single_scale(
         self,
@@ -288,15 +293,19 @@ class ImageTextFusion(nn.Module):
         level_bias = self.level_embedding.weight[level_index].view(1, -1, 1, 1)
         fused_features = image_features + level_bias
         for block_index, block in enumerate(self.blocks):
+            add_positional_encoding = (
+                block_index == self.pos_encode_blocks 
+                or self.pos_encode_blocks == float("inf")
+            )
             fused_features = block(
                 fused_features,
                 text_embeddings,
                 text_padding_mask=text_padding_mask,
-                add_positional_encoding=block_index == 0,
+                add_positional_encoding=add_positional_encoding,
             )
         return fused_features
 
-    def _merge_multiscale_features(self, feature_list: Sequence[torch.Tensor]) -> torch.Tensor:
+    def _merge_multiscale_features(self, feature_list: Iterable[torch.Tensor]) -> torch.Tensor:
         validated_features = _validate_feature_list(feature_list)
         if len(validated_features) != self.num_feature_levels:
             raise ValueError(
@@ -309,11 +318,11 @@ class ImageTextFusion(nn.Module):
         for feature_map in validated_features[1:]:
             resized_features.append(
                 F.interpolate(
-                feature_map,
-                size=(target_height, target_width),
-                mode="bilinear",
-                align_corners=False,
-            )
+                    feature_map,
+                    size=(target_height, target_width),
+                    mode="bilinear",
+                    align_corners=False,
+                )
             )
 
         merged_features = torch.cat(resized_features, dim=1)
@@ -326,12 +335,7 @@ class ImageTextFusion(nn.Module):
         text_padding_mask: torch.Tensor | None = None,
         *,
         return_mask_logits: bool = False,
-    ) -> (
-        torch.Tensor
-        | list[torch.Tensor]
-        | tuple[torch.Tensor, torch.Tensor]
-        | tuple[list[torch.Tensor], torch.Tensor]
-    ):
+    ) -> list[torch.Tensor] | tuple[list[torch.Tensor], torch.Tensor]:
         feature_list = _validate_feature_list(image_features)
         fused_feature_list = [
             self._fuse_single_scale(
