@@ -1,4 +1,4 @@
-from .common import get_device, set_seed, load_classes
+from .common import get_device, set_seed, load_classes, resolve_activation
 from .training import (
     build_autocast_context,
     build_grad_scaler,
@@ -16,4 +16,5 @@ __all__ = [
     "save_checkpoint",
     "set_seed",
     "load_classes",
+    "resolve_activation",
 ]

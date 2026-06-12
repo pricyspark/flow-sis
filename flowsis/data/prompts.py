@@ -4,8 +4,8 @@ import warnings
 from os import PathLike
 from pathlib import Path
 
-from .pretrained.siglip2 import SigLIP2 # TODO: refactor file structure and go back to absolute imports
-from .utils.common import get_device # TODO: refactor file structure and go back to absolute imports
+from flowsis.pretrained import SigLIP2
+from flowsis.utils import get_device
 
 
 def apply_template(label: str) -> str:
@@ -16,7 +16,7 @@ class LabelPrompts:
     def __init__(self) -> None:
         self.prompts: dict[str, list[str]] = {}
         self.embeddings: dict[str, torch.Tensor] = {}
-        self.siglip2 = SigLIP2(device=get_device())
+        self.siglip2 = SigLIP2.from_pretrained(device=get_device())
 
     def add(self, label: str, prompt: str) -> None:
         if label in self.prompts:

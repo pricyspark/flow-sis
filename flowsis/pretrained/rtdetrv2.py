@@ -5,7 +5,7 @@ from PIL import Image
 from pathlib import Path
 from numpy.typing import NDArray
 from dataclasses import dataclass
-from collections.abc import Sequence
+from collections.abc import Iterable
 from typing import Any, Iterable, cast
 from transformers.image_utils import ImageInput
 from transformers.utils.generic import ModelOutput
@@ -62,46 +62,14 @@ class RTDetrV2(nn.Module):
 
     def __init__(
         self,
-        model_name_or_path: str = "PekingU/rtdetr_v2_r18vd",
-        *,
-        cache_dir: str = "flowsis/models",
-        num_labels: int | None = None,
-        id2label: dict[int, str] | None = None,
-        label2id: dict[str, int] | None = None,
+        processor: RTDetrImageProcessor,
+        model: RTDetrV2ForObjectDetection,
         device: str | torch.device | None = None,
     ) -> None:
         super().__init__()
 
-        resolved_source, local_files_only = resolve_pretrained_source(
-            model_name_or_path, 
-            cache_dir,
-        )
-        config = RTDetrV2Config.from_pretrained(
-            resolved_source, 
-            cache_dir=cache_dir,
-            local_files_only=local_files_only,
-        )
-
-        if num_labels is not None:
-            config.num_labels = int(num_labels)
-            if id2label is None:
-                id2label = {index: f"class_{index}" for index in range(num_labels)}
-                label2id = {label: index for index, label in id2label.items()}
-            config.id2label = id2label
-            config.label2id = label2id
-
-        self.processor = RTDetrImageProcessor.from_pretrained(
-            resolved_source,
-            cache_dir=cache_dir,
-            local_files_only=local_files_only,
-        )
-        self.model = RTDetrV2ForObjectDetection.from_pretrained(
-            resolved_source,
-            config=config,
-            cache_dir=cache_dir,
-            ignore_mismatched_sizes=num_labels is not None,
-            local_files_only=local_files_only,
-        )
+        self.processor = processor
+        self.model = model
 
         if device is not None:
             self.to(device)
@@ -112,12 +80,12 @@ class RTDetrV2(nn.Module):
 
     def preprocess(
         self,
-        images: Image.Image | NDArray | torch.Tensor | Sequence[Image.Image | NDArray | torch.Tensor],
-        annotations: Sequence[dict[str, Any]] | None = None,
+        images: Image.Image | NDArray | torch.Tensor | Iterable[Image.Image | NDArray | torch.Tensor],
+        annotations: Iterable[dict[str, Any]] | None = None,
         *,
         image_size: int | None = 640,
     ) -> BatchFeature:
-        image_list = list(images) if isinstance(images, Sequence) else [images]
+        image_list = list(images) if isinstance(images, Iterable) else [images]
         image_input = cast(ImageInput, image_list)
 
         processor_kwargs: dict[str, Any] = {"return_tensors": "pt"}
@@ -151,8 +119,8 @@ class RTDetrV2(nn.Module):
 
     def forward(
         self,
-        images: Image.Image | NDArray | torch.Tensor | Sequence[Image.Image | NDArray | torch.Tensor],
-        annotations: Sequence[dict[str, Any]] | None = None,
+        images: Image.Image | NDArray | torch.Tensor | Iterable[Image.Image | NDArray | torch.Tensor],
+        annotations: Iterable[dict[str, Any]] | None = None,
         *,
         image_size: int | None = None,
         return_outputs: bool = False,
@@ -173,7 +141,7 @@ class RTDetrV2(nn.Module):
     @torch.no_grad()
     def infer(
         self,
-        images: Image.Image | NDArray | torch.Tensor | Sequence[Image.Image | NDArray | torch.Tensor],
+        images: Image.Image | NDArray | torch.Tensor | Iterable[Image.Image | NDArray | torch.Tensor],
         *,
         image_size: int | None = None,
         threshold: float = 0.1,
@@ -182,7 +150,7 @@ class RTDetrV2(nn.Module):
         was_training = self.training
         self.eval()
 
-        image_list = list(images) if isinstance(images, Sequence) else [images]
+        image_list = list(images) if isinstance(images, Iterable) else [images]
         batch = self.preprocess(image_list, annotations=None, image_size=image_size)
         outputs: RTDetrV2ObjectDetectionOutput = self.model(
             pixel_values=batch["pixel_values"],
@@ -221,12 +189,46 @@ class RTDetrV2(nn.Module):
     @classmethod
     def from_pretrained(
         cls,
-        model_name_or_path: str,
+        model_name_or_path: str = "PekingU/rtdetr_v2_r18vd",
         *,
         cache_dir: str = "flowsis/models",
+        num_labels: int | None = None,
+        id2label: dict[int, str] | None = None,
+        label2id: dict[str, int] | None = None,
         device: str | torch.device | None = None,
-    ) -> "RTDetrV2":
-        return cls(model_name_or_path=model_name_or_path, cache_dir=cache_dir, device=device)
+    ) -> RTDetrV2:
+        resolved_source, local_files_only = resolve_pretrained_source(
+            model_name_or_path, 
+            cache_dir,
+        )
+        config = RTDetrV2Config.from_pretrained(
+            resolved_source, 
+            cache_dir=cache_dir,
+            local_files_only=local_files_only,
+        )
+
+        if num_labels is not None:
+            config.num_labels = int(num_labels)
+            if id2label is None:
+                id2label = {index: f"class_{index}" for index in range(num_labels)}
+                label2id = {label: index for index, label in id2label.items()}
+            config.id2label = id2label
+            config.label2id = label2id
+
+        processor = RTDetrImageProcessor.from_pretrained(
+            resolved_source,
+            cache_dir=cache_dir,
+            local_files_only=local_files_only,
+        )
+        model = RTDetrV2ForObjectDetection.from_pretrained(
+            resolved_source,
+            config=config,
+            cache_dir=cache_dir,
+            ignore_mismatched_sizes=num_labels is not None,
+            local_files_only=local_files_only,
+        )
+        
+        return cls(processor, model, device)
 
     def _normalize_annotation(self, annotation: dict[str, Any]) -> dict[str, Any]:
         # TODO: check for correctness

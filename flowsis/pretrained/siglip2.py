@@ -12,14 +12,12 @@ from .common import resolve_pretrained_source
 class SigLIP2(nn.Module):
     def __init__(
         self,
-        model_name_or_path: str = "google/siglip2-base-patch16-224",
+        tokenizer,
+        model,
         *,
-        cache_dir: str = "flowsis/models",
         max_length: int = 64,
         return_mode: Literal["tokens", "pooled"] = "tokens",
         normalize: bool = False,
-        output_hidden_states: bool = False,
-        output_attentions: bool = False,
         device: str | torch.device | None = None,
     ) -> None:
         super().__init__()
@@ -31,6 +29,32 @@ class SigLIP2(nn.Module):
         self.return_mode = return_mode
         self.normalize = bool(normalize)
         
+        self.tokenizer = tokenizer
+        self.model = model
+        
+        self.model.eval()
+        self.model.requires_grad_(False)
+        
+        if device is not None:
+            self.to(device)
+            
+    @property
+    def device(self) -> torch.device:
+        return next(self.model.parameters()).device
+    
+    @classmethod
+    def from_pretrained(
+        cls,
+        model_name_or_path: str = "google/siglip2-base-patch16-224",
+        *,
+        cache_dir: str = "flowsis/models",
+        max_length: int = 64,
+        return_mode: Literal["tokens", "pooled"] = "tokens",
+        normalize: bool = False,
+        output_hidden_states: bool = False,
+        output_attentions: bool = False,
+        device: str | torch.device | None = None,
+    ) -> SigLIP2:
         resolved_source, local_files_only = resolve_pretrained_source(
             model_name_or_path, 
             cache_dir,
@@ -48,28 +72,27 @@ class SigLIP2(nn.Module):
         config.output_hidden_states = output_hidden_states
         config.output_attentions = output_attentions
         
-        self.tokenizer = Siglip2Tokenizer.from_pretrained(
+        tokenizer = Siglip2Tokenizer.from_pretrained(
             resolved_source,
             cache_dir=cache_dir,
             local_files_only=local_files_only,
         )
         
-        self.model = SiglipTextModel.from_pretrained(
+        model = SiglipTextModel.from_pretrained(
             resolved_source,
             config=config,
             cache_dir=cache_dir,
             local_files_only=local_files_only,
         )
-        
-        self.model.eval()
-        self.model.requires_grad_(False)
-        
-        if device is not None:
-            self.to(device)
-            
-    @property
-    def device(self) -> torch.device:
-        return next(self.model.parameters()).device
+         
+        return cls(
+            tokenizer,
+            model,
+            max_length=max_length,
+            return_mode=return_mode,
+            normalize=normalize,
+            device=device,
+        )
     
     @torch.inference_mode()
     def forward(

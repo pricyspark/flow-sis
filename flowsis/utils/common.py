@@ -3,6 +3,7 @@ import torch
 import random
 import numpy as np
 from pathlib import Path
+import torch.nn as nn
 
 
 def set_seed(seed: int) -> None:
@@ -32,3 +33,10 @@ def load_classes(
     vid2label, label2id, raw_id2label = classes
     id2label = {int(key): value for key, value in raw_id2label.items()}
     return vid2label, label2id, id2label
+
+def resolve_activation(activation: str) -> nn.Module:
+    if activation == "gelu":
+        return nn.GELU()
+    if activation == "relu":
+        return nn.ReLU(inplace=True)
+    raise ValueError(f"Unsupported activation function: {activation}")
