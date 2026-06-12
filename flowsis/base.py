@@ -1,12 +1,12 @@
 import torch
 import torch.nn as nn
-from numpy.typing import NDArray
 from PIL import Image
+from numpy.typing import NDArray
 from collections.abc import Iterable
 
 from flowsis.pretrained import RTDetrV2, SigLIP2
 from flowsis.utils import get_device
-
+from .base_head import BaseFusionHead
 
 class FlowSISBase(nn.Module):
     def __init__(
@@ -16,6 +16,7 @@ class FlowSISBase(nn.Module):
     ) -> None:
         self.rtdetrv2 = RTDetrV2.from_pretrained(rt_detrv2_name_or_path)
         self.siglip2 = SigLIP2.from_pretrained(siglip2_name_or_path)
+        # self.head = BaseFusionHead()
     
     def forward(
         self,

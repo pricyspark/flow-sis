@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
-from numpy.typing import NDArray
 from PIL import Image
+from numpy.typing import NDArray
 from collections.abc import Iterable
 
 from flowsis.utils import get_device, resolve_activation

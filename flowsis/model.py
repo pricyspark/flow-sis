@@ -1,12 +1,12 @@
 import torch
 import torch.nn as nn
-from numpy.typing import NDArray
 from PIL import Image
+from numpy.typing import NDArray
 from collections.abc import Iterable
 
-from flowsis.pretrained import RTDetrV2, SigLIP2
 from flowsis.utils import get_device
-
+from .base import FlowSISBase
+from .temporal import TemporalRefinementBranch
 
 class FlowSIS(nn.Module):
     def __init__(
@@ -14,8 +14,10 @@ class FlowSIS(nn.Module):
         rt_detrv2_name_or_path: str = "PekingU/rtdetr_v2_r18vd",
         siglip2_name_or_path: str = "google/siglip2-base-patch16-224",
     ) -> None:
-        self.rtdetrv2 = RTDetrV2.from_pretrained(rt_detrv2_name_or_path)
-        self.siglip2 = SigLIP2.from_pretrained(siglip2_name_or_path)
+        self.base = FlowSISBase(
+            rt_detrv2_name_or_path,
+            siglip2_name_or_path,
+        )
     
     def forward(
         self,
