@@ -131,9 +131,11 @@ class ImageTextFusionBlock(nn.Module):
 
     def __init__(
         self,
-        d_model: int,
+        image_dim: int,
+        text_dim: int,
         nhead: int,
         dim_feedforward: int = 2048,
+        image_self_attention: Literal["global", "window", "none"] = "global",
         dropout: float = 0.1,
         activation: str = "gelu",
     ) -> None:
@@ -141,24 +143,26 @@ class ImageTextFusionBlock(nn.Module):
 
         act = resolve_activation(activation)
 
-        self.image_norm1 = nn.LayerNorm(d_model)
-        self.image_norm2 = nn.LayerNorm(d_model)
-        self.image_norm3 = nn.LayerNorm(d_model)
-        self.text_norm = nn.LayerNorm(d_model)
+        self.image_norm1 = nn.LayerNorm(image_dim)
+        self.image_norm2 = nn.LayerNorm(image_dim)
+        self.image_norm3 = nn.LayerNorm(image_dim)
+        self.text_norm = nn.LayerNorm(text_dim)
 
         # Keep flatten/reshape local to the attention block so callers can work
         # with image-shaped tensors for dense prediction tasks like segmentation.
         self.self_attention = nn.MultiheadAttention(
-            embed_dim=d_model,
+            embed_dim=image_dim,
             num_heads=nhead,
             dropout=dropout,
             batch_first=True,
         )
         self.cross_attention = nn.MultiheadAttention(
-            embed_dim=d_model,
+            embed_dim=image_dim,
             num_heads=nhead,
             dropout=dropout,
             batch_first=True,
+            kdim=text_dim, # TODO:
+            vdim=text_dim,
         )
 
         self.dropout1 = nn.Dropout(dropout)
@@ -166,10 +170,10 @@ class ImageTextFusionBlock(nn.Module):
         self.dropout3 = nn.Dropout(dropout)
 
         self.ffn = nn.Sequential(
-            nn.Linear(d_model, dim_feedforward),
+            nn.Linear(image_dim, dim_feedforward),
             act,
             nn.Dropout(dropout),
-            nn.Linear(dim_feedforward, d_model),
+            nn.Linear(dim_feedforward, image_dim),
         )
 
     def forward(
@@ -185,7 +189,7 @@ class ImageTextFusionBlock(nn.Module):
                 "Expected text embeddings with shape [B, T, C], "
                 f"but received {tuple(text_embeddings.shape)}."
             )
-
+        # image_tokens: (1,H*W,C)
         image_tokens, spatial_shape, positional_encoding = _to_image_tokens(
             image_features,
             add_positional_encoding=add_positional_encoding,
@@ -212,7 +216,7 @@ class ImageTextFusionBlock(nn.Module):
         cross_attention_output, _ = self.cross_attention(
             image_cross_attn_query,
             normalized_text,
-            normalized_text,
+            normalized_text, # TODO: why is text the value and not image
             key_padding_mask=text_padding_mask,
             need_weights=False,
         )
@@ -234,12 +238,13 @@ class ImageTextFusion(nn.Module):
     def __init__(
         self,
         num_layers: int,
-        d_model: int,
+        embed_dim: int,
+        image_dim: int,
+        text_dim: int,
         nhead: int,
         dim_feedforward: int = 2048,
         dropout: float = 0.1,
         activation: str = "gelu",
-        out_channels: int = 1,
         num_feature_levels: int = 3,
         pos_encode: Literal["NONE", "FIRST", "SECOND", "ALL"] = "FIRST"
     ) -> None:
@@ -249,7 +254,8 @@ class ImageTextFusion(nn.Module):
         self.blocks = nn.ModuleList(
             [
                 ImageTextFusionBlock(
-                    d_model=d_model,
+                    image_dim=image_dim,
+                    text_dim=text_dim,
                     nhead=nhead,
                     dim_feedforward=dim_feedforward,
                     dropout=dropout,
@@ -258,17 +264,12 @@ class ImageTextFusion(nn.Module):
                 for _ in range(num_layers)
             ]
         )
-        self.level_embedding = nn.Embedding(self.num_feature_levels, d_model)
+        self.level_embedding = nn.Embedding(self.num_feature_levels, embed_dim)
         self.level_fuse = nn.Sequential(
-            nn.Conv2d(d_model * self.num_feature_levels, d_model, kernel_size=1),
+            nn.Conv2d(embed_dim * self.num_feature_levels, embed_dim, kernel_size=1),
             resolve_activation(activation),
-            nn.Conv2d(d_model, d_model, kernel_size=3, padding=1),
+            nn.Conv2d(embed_dim, embed_dim, kernel_size=3, padding=1),
             resolve_activation(activation),
-        )
-        self.mask_head = nn.Sequential(
-            nn.Conv2d(d_model, d_model, kernel_size=3, padding=1),
-            resolve_activation(activation),
-            nn.Conv2d(d_model, out_channels, kernel_size=1),
         )
         
         pos_encode_dict = {"NONE": -1, "FIRST": 0, "SECOND": 1, "ALL": float("inf")}
@@ -323,8 +324,8 @@ class ImageTextFusion(nn.Module):
                 )
             )
 
-        merged_features = torch.cat(resized_features, dim=1)
-        return self.level_fuse(merged_features)
+        merged_features = torch.cat(resized_features, dim=1) # (B,C*3,H,W)
+        return self.level_fuse(merged_features) # (B,C,H,W)
 
     def forward(
         self,
