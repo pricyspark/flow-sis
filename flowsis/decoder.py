@@ -140,6 +140,9 @@ class ImageTextFusionBlock(nn.Module):
         activation: str = "gelu",
     ) -> None:
         super().__init__()
+        
+        # TODO: maybe add embed_dim param to reduce the number of
+        # channels within each attention head.
 
         act = resolve_activation(activation)
 
@@ -148,8 +151,8 @@ class ImageTextFusionBlock(nn.Module):
         self.image_norm3 = nn.LayerNorm(image_dim)
         self.text_norm = nn.LayerNorm(text_dim)
 
-        # Keep flatten/reshape local to the attention block so callers can work
-        # with image-shaped tensors for dense prediction tasks like segmentation.
+        # TODO: implement window self attention, since the score map can
+        # get huge. Keep global self attention for smaller embeddings
         self.self_attention = nn.MultiheadAttention(
             embed_dim=image_dim,
             num_heads=nhead,
@@ -345,6 +348,11 @@ class ImageTextFusion(nn.Module):
             )
             for level_index, feature_map in enumerate(feature_list)
         ]
+        
+        # TODO: add multiscale deformable attention, since global
+        # attention is too expensive. If this is good enough, self
+        # attention may be unnecessary in the fusion blocks.
+        
         if not return_mask_logits:
             return fused_feature_list
 
