@@ -2,8 +2,9 @@ import json
 import torch
 import random
 import numpy as np
-from pathlib import Path
 import torch.nn as nn
+from pathlib import Path
+from typing import Literal
 
 
 def set_seed(seed: int) -> None:
@@ -34,7 +35,7 @@ def load_classes(
     id2label = {int(key): value for key, value in raw_id2label.items()}
     return vid2label, label2id, id2label
 
-def resolve_activation(activation: str) -> nn.Module:
+def resolve_activation(activation: Literal["gelu", "relu"]) -> nn.Module:
     if activation == "gelu":
         return nn.GELU()
     if activation == "relu":
