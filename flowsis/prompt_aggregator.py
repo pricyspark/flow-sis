@@ -1,20 +1,17 @@
 import torch
 import torch.nn as nn
-from PIL import Image
-from numpy.typing import NDArray
-from collections.abc import Iterable
+from typing import Literal
 
-from flowsis.utils import get_device, resolve_activation
+from flowsis.utils import resolve_activation
 
 
-class PromptAggregator(nn.Module):
+class ChannelAggregator(nn.Module):
     """
-    Text-conditioned scoring head for segmentation experts.
+    Global text-conditioned channel scoring head.
 
-    This is a lightweight alternative to TP-SIS's overloaded
-    `MaskIoUProjector`: it pools image features, combines them with a pooled
-    text embedding, and returns routing logits. The caller can softmax those
-    logits across sentences or experts when using weighted-sum MoE inference.
+    The module pools spatial image features, combines them with a pooled text
+    embedding, and predicts sample-level logits that can be used as channel
+    gates or expert-routing scores.
     """
 
     def __init__(
@@ -23,12 +20,13 @@ class PromptAggregator(nn.Module):
         text_dim: int,
         *,
         hidden_dim: int | None = None,
-        output_dim: int = 1,
+        output_dim: int | None = None,
         dropout: float = 0.1,
-        activation: str = "gelu",
+        activation: Literal["gelu", "relu"] = "gelu",
     ) -> None:
         super().__init__()
         hidden_dim = int(hidden_dim or max(image_dim, text_dim))
+        output_dim = int(output_dim or image_dim)
 
         self.image_proj = nn.Linear(image_dim, hidden_dim)
         self.text_proj = nn.Linear(text_dim, hidden_dim)
@@ -94,8 +92,20 @@ class PromptAggregator(nn.Module):
         image_state = self.image_proj(pooled_image)
         text_state = self.text_proj(pooled_text)
         logits = self.scorer(torch.cat([image_state, text_state], dim=-1))
-        return logits.squeeze(-1)
+        return logits.squeeze(-1) if logits.shape[-1] == 1 else logits
 
     @staticmethod
     def compute_weights(logits: torch.Tensor, dim: int = 1) -> torch.Tensor:
         return torch.softmax(logits, dim=dim)
+
+    @staticmethod
+    def compute_gates(logits: torch.Tensor) -> torch.Tensor:
+        return torch.sigmoid(logits)
+
+
+PromptAggregator = ChannelAggregator
+
+__all__ = [
+    "ChannelAggregator",
+    "PromptAggregator",
+]
