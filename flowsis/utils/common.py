@@ -35,9 +35,9 @@ def load_classes(
     id2label = {int(key): value for key, value in raw_id2label.items()}
     return vid2label, label2id, id2label
 
-def resolve_activation(activation: Literal["GELU", "RELU"]) -> nn.Module:
-    if activation == "GELU":
+def resolve_activation(activation: Literal["gelu", "relu"]) -> nn.Module:
+    if activation == "gelu":
         return nn.GELU()
-    if activation == "RELU":
+    if activation == "relu":
         return nn.ReLU(inplace=True)
     raise ValueError(f"Unsupported activation function: {activation}")

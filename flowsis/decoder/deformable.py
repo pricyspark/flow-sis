@@ -27,7 +27,7 @@ class TextGuidedDeformableFusion(nn.Module):
         num_points: int = 4,
         offset_scale: float = 2.0,
         dropout: float = 0.1,
-        activation: Literal["GELU", "RELU"] = "GELU",
+        activation: Literal["gelu", "relu"] = "gelu",
     ) -> None:
         super().__init__()
 
@@ -47,7 +47,10 @@ class TextGuidedDeformableFusion(nn.Module):
         self.query_proj = nn.Conv2d(image_dim, image_dim, kernel_size=1)
         self.text_proj = nn.Linear(text_dim, image_dim)
         self.value_proj = nn.ModuleList(
-            [nn.Conv2d(image_dim, image_dim, kernel_size=1) for _ in range(self.num_feature_levels)]
+            [
+                nn.Conv2d(image_dim, image_dim, kernel_size=1) 
+                for _ in range(self.num_feature_levels)
+            ]
         )
         self.offset_head = nn.Conv2d(
             image_dim,

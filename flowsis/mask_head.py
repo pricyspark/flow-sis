@@ -16,7 +16,7 @@ class _UpsampleBlock(nn.Module):
         out_channels: int,
         *,
         dropout: float,
-        activation: Literal["GELU", "RELU"],
+        activation: Literal["gelu", "relu"],
     ) -> None:
         super().__init__()
         self.block = nn.Sequential(
@@ -55,7 +55,7 @@ class MaskHead(nn.Module):
         output_dim: int = 1,
         upsample_scales: Iterable[int] = (2, 2),
         dropout: float = 0.1,
-        activation: Literal["GELU", "RELU"] = "GELU",
+        activation: Literal["gelu", "relu"] = "gelu",
     ) -> None:
         super().__init__()
         if output_dim <= 0:

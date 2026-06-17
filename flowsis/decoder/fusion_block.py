@@ -27,11 +27,11 @@ class ImageTextFusionBlock(nn.Module):
         text_dim: int,
         nhead: int,
         ffn_dim: int = 2048,
-        image_self_attention: Literal["GLOBAL", "WINDOW", "NONE"] = "GLOBAL",
+        image_self_attention: Literal["GLOBAL", "WINDOW", "none"] = "GLOBAL",
         window_size: int = 8,
         window_shift_size: int = 0,
         dropout: float = 0.1,
-        activation: Literal["GELU", "RELU"] = "GELU",
+        activation: Literal["gelu", "relu"] = "gelu",
     ) -> None:
         super().__init__()
         
@@ -45,7 +45,7 @@ class ImageTextFusionBlock(nn.Module):
         self.image_norm3 = nn.LayerNorm(image_dim)
         self.text_norm = nn.LayerNorm(text_dim)
 
-        if image_self_attention not in {"GLOBAL", "WINDOW", "NONE"}:
+        if image_self_attention not in {"GLOBAL", "WINDOW", "none"}:
             raise ValueError(
                 "image_self_attention must be one of {'global', 'window', 'none'}, "
                 f"but received {image_self_attention!r}."

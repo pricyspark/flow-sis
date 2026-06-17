@@ -11,7 +11,7 @@ from .shape import validate_feature_list
 
 class ImageTextFusion(nn.Module):
     """
-    Stack multiple image/text fusion blocks and optionally predict mask logits.
+    Stack multiple image/text fusion blocks and optionally merge scales.
 
     Accepts either a single `[B, C, H, W]` feature map or a multi-scale list of
     RT-DETRv2 encoder features ordered from highest to lowest resolution.
@@ -26,22 +26,29 @@ class ImageTextFusion(nn.Module):
         nhead: int,
         ffn_dim: int = 2048,
         dropout: float = 0.1,
-        activation: Literal["GELU", "RELU"] = "GELU",
+        activation: Literal["gelu", "relu"] = "gelu",
         num_feature_levels: int = 3,
-        pos_encode: Literal["NONE", "FIRST", "SECOND", "ALL"] = "FIRST",
-        image_self_attention: Literal["GLOBAL", "WINDOW", "NONE"] = "GLOBAL",
+        pos_encode: Literal["none", "first", "second", "all"] = "first",
+        image_self_attention: Literal["GLOBAL", "WINDOW", "none"] = "GLOBAL",
         window_size: int = 8,
         use_shifted_windows: bool = True,
-        multiscale_merge: Literal["conv", "deformable"] = "conv",
+        multiscale_merge: Literal["conv", "deformable", "none"] = "conv",
         deformable_num_points: int = 4,
         deformable_offset_scale: float = 2.0,
     ) -> None:
         super().__init__()
 
         self.num_feature_levels = int(num_feature_levels)
-        if multiscale_merge not in {"conv", "deformable"}:
+        self.feature_dim = int(image_dim)
+        if int(embed_dim) != self.feature_dim:
             raise ValueError(
-                "multiscale_merge must be one of {'conv', 'deformable'}, "
+                "embed_dim must match image_dim in the current ImageTextFusion "
+                f"implementation, but received embed_dim={embed_dim} and "
+                f"image_dim={image_dim}."
+            )
+        if multiscale_merge not in {"conv", "deformable", "none"}:
+            raise ValueError(
+                "multiscale_merge must be one of {'conv', 'deformable', 'none'}, "
                 f"but received {multiscale_merge!r}."
             )
 
@@ -66,13 +73,19 @@ class ImageTextFusion(nn.Module):
             ]
         )
         self.multiscale_merge = multiscale_merge
-        self.level_embedding = nn.Embedding(self.num_feature_levels, embed_dim)
-        self.level_fuse = nn.Sequential(
-            nn.Conv2d(embed_dim * self.num_feature_levels, embed_dim, kernel_size=1),
-            resolve_activation(activation),
-            nn.Conv2d(embed_dim, embed_dim, kernel_size=3, padding=1),
-            resolve_activation(activation),
-        )
+        self.level_embedding = nn.Embedding(self.num_feature_levels, self.feature_dim)
+        self.level_fuse = None
+        if self.multiscale_merge == "conv":
+            self.level_fuse = nn.Sequential(
+                nn.Conv2d(
+                    self.feature_dim * self.num_feature_levels,
+                    self.feature_dim,
+                    kernel_size=1,
+                ),
+                resolve_activation(activation),
+                nn.Conv2d(self.feature_dim, self.feature_dim, kernel_size=3, padding=1),
+                resolve_activation(activation),
+            )
         self.deformable_fuse = None
         if self.multiscale_merge == "deformable":
             self.deformable_fuse = TextGuidedDeformableFusion(
@@ -85,7 +98,7 @@ class ImageTextFusion(nn.Module):
                 activation=activation,
             )
 
-        pos_encode_dict = {"NONE": -1, "FIRST": 0, "SECOND": 1, "ALL": float("inf")}
+        pos_encode_dict = {"none": -1, "first": 0, "second": 1, "all": float("inf")}
         self.pos_encode_blocks = pos_encode_dict[pos_encode]
 
     def _fuse_single_scale(
@@ -118,6 +131,9 @@ class ImageTextFusion(nn.Module):
         return fused_features
 
     def _merge_multiscale_features(self, feature_list: Iterable[torch.Tensor]) -> torch.Tensor:
+        if self.level_fuse is None:
+            raise RuntimeError("Conv multiscale fusion is not enabled for this decoder.")
+
         validated_features = validate_feature_list(feature_list)
         if len(validated_features) != self.num_feature_levels:
             raise ValueError(
@@ -140,6 +156,24 @@ class ImageTextFusion(nn.Module):
         merged_features = torch.cat(resized_features, dim=1) # (B,C*3,H,W)
         return self.level_fuse(merged_features) # (B,C,H,W)
 
+    def _get_merged_features(
+        self,
+        fused_feature_list: Iterable[torch.Tensor],
+        text_embeddings: torch.Tensor,
+        text_padding_mask: torch.Tensor | None = None,
+    ) -> torch.Tensor | None:
+        if self.multiscale_merge == "none":
+            return None
+
+        if self.deformable_fuse is not None:
+            return self.deformable_fuse(
+                fused_feature_list,
+                text_embeddings,
+                text_padding_mask=text_padding_mask,
+            )
+
+        return self._merge_multiscale_features(fused_feature_list)
+
     def forward(
         self,
         multi_image_features: Iterable[torch.Tensor],
@@ -147,7 +181,7 @@ class ImageTextFusion(nn.Module):
         text_padding_mask: torch.Tensor | None = None,
         *,
         return_merged_features: bool = False,
-    ) -> list[torch.Tensor] | tuple[list[torch.Tensor], torch.Tensor]:
+    ) -> list[torch.Tensor] | tuple[list[torch.Tensor], torch.Tensor | None]:
         feature_list = validate_feature_list(multi_image_features)
         fused_feature_list = [
             self._fuse_single_scale(
@@ -161,12 +195,9 @@ class ImageTextFusion(nn.Module):
         if not return_merged_features:
             return fused_feature_list
 
-        if self.deformable_fuse is not None:
-            merged_features = self.deformable_fuse(
-                fused_feature_list,
-                text_embeddings,
-                text_padding_mask=text_padding_mask,
-            )
-        else:
-            merged_features = self._merge_multiscale_features(fused_feature_list)
+        merged_features = self._get_merged_features(
+            fused_feature_list,
+            text_embeddings,
+            text_padding_mask=text_padding_mask,
+        )
         return fused_feature_list, merged_features

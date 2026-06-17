@@ -22,7 +22,7 @@ class ChannelAggregator(nn.Module):
         hidden_dim: int | None = None,
         output_dim: int | None = None,
         dropout: float = 0.1,
-        activation: Literal["GELU", "RELU"] = "GELU",
+        activation: Literal["gelu", "relu"] = "gelu",
     ) -> None:
         super().__init__()
         hidden_dim = int(hidden_dim or max(image_dim, text_dim))

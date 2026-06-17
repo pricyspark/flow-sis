@@ -10,6 +10,15 @@ from .prompt_aggregator import ChannelAggregator
 
 
 class BaseFusionHead(nn.Module):
+    """
+    Compose the fusion decoder, optional channel modulation, and mask head.
+
+    The decoder is responsible for per-level image/text fusion and may also
+    optionally collapse the multi-scale feature list into a single feature map.
+    `BaseFusionHead` then selects the mask input feature map, optionally applies
+    a text-conditioned channel modulation step, and predicts the final mask.
+    """
+
     def __init__(
         self,
         num_decode_layers: int,
@@ -19,22 +28,44 @@ class BaseFusionHead(nn.Module):
         nhead: int,
         decode_ffn_dim: int,
         dropout: float,
-        activation: Literal["GELU", "RELU"],
-        num_feature_levels,
-        decode_pos_encode,
-        image_self_attention,
-        decode_window_size,
-        use_shifted_windows,
-        multiscale_merge,
-        deformable_num_points,
-        deformable_offset_scale,
-        aggregator_dim,
+        activation: Literal["gelu", "relu"],
+        num_feature_levels: int,
+        decode_pos_encode: Literal["none", "first", "second", "all"],
+        image_self_attention: Literal["GLOBAL", "WINDOW", "none"],
+        decode_window_size: int,
+        use_shifted_windows: bool,
+        multiscale_merge: Literal["conv", "deformable", "none"],
+        deformable_num_points: int,
+        deformable_offset_scale: float,
+        aggregator_dim: int | None = None,
         *,
+        channel_aggregation: Literal["none", "sigmoid", "softmax"] = "sigmoid",
+        mask_feature_source: Literal["merged", "highest_resolution"] = "merged",
         mask_head_hidden_dim: int | None = None,
         mask_output_dim: int = 1,
         mask_upsample_scales: tuple[int, ...] = (2, 2),
     ) -> None:
         super().__init__()
+
+        if channel_aggregation not in {"none", "sigmoid", "softmax"}:
+            raise ValueError(
+                "channel_aggregation must be one of {'none', 'sigmoid', 'softmax'}, "
+                f"but received {channel_aggregation!r}."
+            )
+        if mask_feature_source not in {"merged", "highest_resolution"}:
+            raise ValueError(
+                "mask_feature_source must be one of {'merged', 'highest_resolution'}, "
+                f"but received {mask_feature_source!r}."
+            )
+        if mask_feature_source == "merged" and multiscale_merge == "none":
+            raise ValueError(
+                "mask_feature_source='merged' requires multiscale_merge to produce a "
+                "merged feature map. Use multiscale_merge='conv' or 'deformable', or "
+                "switch mask_feature_source to 'highest_resolution'."
+            )
+
+        self.channel_aggregation = channel_aggregation
+        self.mask_feature_source = mask_feature_source
         self.mask_output_dim = int(mask_output_dim)
 
         self.decoder = ImageTextFusion(
@@ -55,23 +86,60 @@ class BaseFusionHead(nn.Module):
             deformable_num_points=deformable_num_points,
             deformable_offset_scale=deformable_offset_scale,
         )
-        self.channel_aggregator = ChannelAggregator(
-            image_dim=image_dim,
-            text_dim=text_dim,
-            hidden_dim=aggregator_dim,
-            output_dim=image_dim,
-            dropout=dropout,
-            activation=activation,
-        )
+        self.channel_aggregator = None
+        if self.channel_aggregation != "none":
+            self.channel_aggregator = ChannelAggregator(
+                image_dim=image_dim,
+                text_dim=text_dim,
+                hidden_dim=aggregator_dim,
+                output_dim=image_dim,
+                dropout=dropout,
+                activation=activation,
+            )
         self.mask_head = MaskHead(
             image_dim=image_dim,
             text_dim=text_dim,
-            hidden_dim=mask_head_hidden_dim or aggregator_dim,
+            hidden_dim=mask_head_hidden_dim if mask_head_hidden_dim is not None else aggregator_dim,
             output_dim=mask_output_dim,
             upsample_scales=mask_upsample_scales,
             dropout=dropout,
             activation=activation,
         )
+
+    def _select_mask_features(
+        self,
+        fused_feature_list: list[torch.Tensor],
+        merged_features: torch.Tensor | None,
+    ) -> torch.Tensor:
+        if self.mask_feature_source == "highest_resolution":
+            return fused_feature_list[0]
+        if merged_features is None:
+            raise RuntimeError(
+                "Expected merged decoder features, but the decoder returned None."
+            )
+        return merged_features
+
+    def _apply_channel_aggregation(
+        self,
+        image_features: torch.Tensor,
+        text_embeddings: torch.Tensor,
+        text_padding_mask: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
+        if self.channel_aggregator is None:
+            return image_features, None, None
+
+        channel_logits = self.channel_aggregator(
+            image_features,
+            text_embeddings,
+            text_padding_mask=text_padding_mask,
+        )
+        if self.channel_aggregation == "sigmoid":
+            channel_modulation = ChannelAggregator.compute_gates(channel_logits)
+        else:
+            channel_modulation = ChannelAggregator.compute_weights(channel_logits, dim=-1)
+
+        modulated_features = image_features * channel_modulation.unsqueeze(-1).unsqueeze(-1)
+        return modulated_features, channel_logits, channel_modulation
 
     def forward(
         self,
@@ -80,7 +148,7 @@ class BaseFusionHead(nn.Module):
         text_padding_mask: torch.Tensor | None = None,
         *,
         mask_output_size: tuple[int, int] | None = None,
-    ) -> dict[str, torch.Tensor | list[torch.Tensor]]:
+    ) -> dict[str, torch.Tensor | list[torch.Tensor] | None]:
         fused_feature_list, merged_features = self.decoder(
             multi_image_features,
             text_embeddings,
@@ -88,15 +156,14 @@ class BaseFusionHead(nn.Module):
             return_merged_features=True,
         )
 
-        channel_logits = self.channel_aggregator(
-            merged_features,
+        mask_features = self._select_mask_features(fused_feature_list, merged_features)
+        modulated_features, channel_logits, channel_modulation = self._apply_channel_aggregation(
+            mask_features,
             text_embeddings,
             text_padding_mask=text_padding_mask,
         )
-        channel_gates = ChannelAggregator.compute_gates(channel_logits).unsqueeze(-1).unsqueeze(-1)
-        gated_features = merged_features * channel_gates
         mask_logits = self.mask_head(
-            gated_features,
+            modulated_features,
             text_embeddings,
             text_padding_mask=text_padding_mask,
             output_size=mask_output_size,
@@ -108,8 +175,9 @@ class BaseFusionHead(nn.Module):
         return {
             "fused_feature_list": fused_feature_list,
             "merged_features": merged_features,
-            "gated_features": gated_features,
+            "mask_features": mask_features,
+            "modulated_features": modulated_features,
             "channel_logits": channel_logits,
-            "channel_gates": channel_gates.squeeze(-1).squeeze(-1),
+            "channel_modulation": channel_modulation,
             "mask_logits": mask_logits,
         }
