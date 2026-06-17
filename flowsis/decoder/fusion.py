@@ -26,10 +26,10 @@ class ImageTextFusion(nn.Module):
         nhead: int,
         ffn_dim: int = 2048,
         dropout: float = 0.1,
-        activation: Literal["gelu", "relu"] = "gelu",
+        activation: Literal["GELU", "RELU"] = "GELU",
         num_feature_levels: int = 3,
         pos_encode: Literal["NONE", "FIRST", "SECOND", "ALL"] = "FIRST",
-        image_self_attention: Literal["global", "window", "none"] = "global",
+        image_self_attention: Literal["GLOBAL", "WINDOW", "NONE"] = "GLOBAL",
         window_size: int = 8,
         use_shifted_windows: bool = True,
         multiscale_merge: Literal["conv", "deformable"] = "conv",
@@ -56,7 +56,7 @@ class ImageTextFusion(nn.Module):
                     window_size=window_size,
                     window_shift_size=(
                         window_size // 2
-                        if use_shifted_windows and image_self_attention == "window" and layer_index % 2 == 1
+                        if use_shifted_windows and image_self_attention == "WINDOW" and layer_index % 2 == 1
                         else 0
                     ),
                     dropout=dropout,
@@ -146,7 +146,7 @@ class ImageTextFusion(nn.Module):
         text_embeddings: torch.Tensor,
         text_padding_mask: torch.Tensor | None = None,
         *,
-        return_mask_logits: bool = False,
+        return_merged_features: bool = False,
     ) -> list[torch.Tensor] | tuple[list[torch.Tensor], torch.Tensor]:
         feature_list = validate_feature_list(multi_image_features)
         fused_feature_list = [
@@ -158,7 +158,7 @@ class ImageTextFusion(nn.Module):
             )
             for level_index, feature_map in enumerate(feature_list)
         ]
-        if not return_mask_logits:
+        if not return_merged_features:
             return fused_feature_list
 
         if self.deformable_fuse is not None:

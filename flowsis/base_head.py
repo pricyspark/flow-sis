@@ -19,7 +19,7 @@ class BaseFusionHead(nn.Module):
         nhead: int,
         decode_ffn_dim: int,
         dropout: float,
-        activation: Literal["gelu", "relu"],
+        activation: Literal["GELU", "RELU"],
         num_feature_levels,
         decode_pos_encode,
         image_self_attention,
@@ -85,7 +85,7 @@ class BaseFusionHead(nn.Module):
             multi_image_features,
             text_embeddings,
             text_padding_mask=text_padding_mask,
-            return_mask_logits=True,
+            return_merged_features=True,
         )
 
         channel_logits = self.channel_aggregator(

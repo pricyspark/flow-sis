@@ -27,11 +27,11 @@ class ImageTextFusionBlock(nn.Module):
         text_dim: int,
         nhead: int,
         ffn_dim: int = 2048,
-        image_self_attention: Literal["global", "window", "none"] = "global",
+        image_self_attention: Literal["GLOBAL", "WINDOW", "NONE"] = "GLOBAL",
         window_size: int = 8,
         window_shift_size: int = 0,
         dropout: float = 0.1,
-        activation: Literal["gelu", "relu"] = "gelu",
+        activation: Literal["GELU", "RELU"] = "GELU",
     ) -> None:
         super().__init__()
         
@@ -45,7 +45,7 @@ class ImageTextFusionBlock(nn.Module):
         self.image_norm3 = nn.LayerNorm(image_dim)
         self.text_norm = nn.LayerNorm(text_dim)
 
-        if image_self_attention not in {"global", "window", "none"}:
+        if image_self_attention not in {"GLOBAL", "WINDOW", "NONE"}:
             raise ValueError(
                 "image_self_attention must be one of {'global', 'window', 'none'}, "
                 f"but received {image_self_attention!r}."
@@ -199,7 +199,7 @@ class ImageTextFusionBlock(nn.Module):
             add_positional_encoding=add_positional_encoding,
         )
         normalized_image_tokens = self.image_norm1(image_tokens)
-        if self.image_self_attention == "global":
+        if self.image_self_attention == "GLOBAL":
             image_self_attn_query = normalized_image_tokens
             image_self_attn_key = normalized_image_tokens
             if positional_encoding is not None:
@@ -213,7 +213,7 @@ class ImageTextFusionBlock(nn.Module):
                 need_weights=False,
             )
             image_tokens = image_tokens + self.dropout1(self_attention_output)
-        elif self.image_self_attention == "window":
+        elif self.image_self_attention == "WINDOW":
             self_attention_output = self._apply_window_self_attention(
                 normalized_image_tokens,
                 spatial_shape,

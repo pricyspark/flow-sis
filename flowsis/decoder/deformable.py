@@ -27,7 +27,7 @@ class TextGuidedDeformableFusion(nn.Module):
         num_points: int = 4,
         offset_scale: float = 2.0,
         dropout: float = 0.1,
-        activation: Literal["gelu", "relu"] = "gelu",
+        activation: Literal["GELU", "RELU"] = "GELU",
     ) -> None:
         super().__init__()
 
