@@ -14,6 +14,7 @@ from transformers import RTDetrImageProcessor, RTDetrV2Config, RTDetrV2ForObject
 from transformers.models.rt_detr_v2.modeling_rt_detr_v2 import RTDetrV2ObjectDetectionOutput
 
 from .common import resolve_pretrained_source
+from ..data.object_records import get_object_records
 
 
 def _infer_single_image_size(image: Image.Image | NDArray | torch.Tensor) -> tuple[int, int]:
@@ -235,19 +236,14 @@ class RTDetrV2(nn.Module):
         if "annotations" in annotation:
             coco_annotations = annotation["annotations"]
         elif "objects" in annotation:
-            objects = annotation["objects"]
             coco_annotations = [
                 {
-                    "bbox": [float(value) for value in bbox],
-                    "category_id": int(category_id),
-                    "area": float(area),
+                    "bbox": [float(value) for value in object_record["bbox"]],
+                    "category_id": int(object_record["category"]),
+                    "area": float(object_record["area"]),
                     "iscrowd": 0,
                 }
-                for bbox, category_id, area in zip(
-                    objects["bbox"],
-                    objects["category"],
-                    objects["area"],
-                )
+                for object_record in get_object_records(annotation)
             ]
         else:
             raise ValueError("Expected annotation with either 'annotations' or 'objects'.")
@@ -267,7 +263,6 @@ class RTDetrV2(nn.Module):
         }
 
     def _flatten_encodings(self, encoder_feature_maps: Iterable[torch.Tensor]) -> dict[str, Any]:
-        # TODO: check if reshaping is necessary, helpful, or hurtful. It hurts potential downstream convolution but is good for attention
         feature_maps = list(encoder_feature_maps)
         if not feature_maps:
             raise ValueError("RT-DETRv2 did not return encoder feature maps.")

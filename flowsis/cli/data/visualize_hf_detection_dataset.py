@@ -3,7 +3,9 @@ import math
 import random
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
-from datasets import ClassLabel, Dataset, DatasetDict, IterableDatasetDict, load_from_disk
+from datasets import ClassLabel, Dataset, DatasetDict, load_from_disk
+
+from flowsis.data.object_records import get_object_feature_schema, get_object_records
 
 
 DEFAULT_DATASET_PATH = Path("data/dataset")
@@ -36,15 +38,14 @@ def parse_args() -> argparse.Namespace:
 
 def load_split(dataset_path: Path, split_name: str) -> tuple[Dataset, dict[int, str]]:
     dataset = load_from_disk(str(dataset_path))
-    if isinstance(dataset, IterableDatasetDict):
-        raise TypeError("Expected a map-style dataset saved to disk, but found an iterable dataset.")
     if not isinstance(dataset, DatasetDict):
         raise TypeError("Expected a dataset with named splits.")
     if split_name not in dataset:
         raise KeyError(f"Split '{split_name}' not found in dataset. Available: {list(dataset.keys())}")
 
     split = dataset[split_name]
-    category_feature = split.features["objects"]["category"]
+    object_schema = get_object_feature_schema(split.features["objects"])
+    category_feature = object_schema["category"]
     if hasattr(category_feature, "feature"):
         category_feature = category_feature.feature
     if not isinstance(category_feature, ClassLabel):
@@ -67,8 +68,7 @@ def draw_example(example: dict, *, id2label: dict[int, str]) -> Image.Image:
     draw = ImageDraw.Draw(canvas)
     font = ImageFont.load_default()
 
-    boxes = example["objects"]["bbox"]
-    categories = example["objects"]["category"]
+    object_records = get_object_records(example)
     colors = [
         "#ff5a5f",
         "#2ec4b6",
@@ -78,8 +78,8 @@ def draw_example(example: dict, *, id2label: dict[int, str]) -> Image.Image:
         "#20bf55",
     ]
 
-    for index, (bbox, category_id) in enumerate(zip(boxes, categories)):
-        x, y, width, height = [float(value) for value in bbox]
+    for index, object_record in enumerate(object_records):
+        x, y, width, height = [float(value) for value in object_record["bbox"]]
         x1 = max(0.0, x)
         y1 = max(0.0, y)
         x2 = min(float(canvas.width), x + width)
@@ -88,7 +88,8 @@ def draw_example(example: dict, *, id2label: dict[int, str]) -> Image.Image:
 
         draw.rectangle((x1, y1, x2, y2), outline=color, width=max(2, canvas.width // 300))
 
-        label = id2label.get(int(category_id), str(category_id))
+        category_id = int(object_record["category"])
+        label = id2label.get(category_id, str(category_id))
         text = f"{label}"
         left, top, right, bottom = draw.textbbox((0, 0), text, font=font)
         text_width = right - left
@@ -101,11 +102,21 @@ def draw_example(example: dict, *, id2label: dict[int, str]) -> Image.Image:
         )
         draw.text((text_x + 4, text_y + 2), text, fill="white", font=font)
 
+    source_pairs = {
+        (int(record["video_id"]), int(record["frame_idx"]))
+        for record in object_records
+        if "video_id" in record and "frame_idx" in record
+    }
+    if len(source_pairs) == 1:
+        video_id, frame_idx = next(iter(source_pairs))
+        source_summary = f"video_id={video_id} frame_idx={frame_idx}"
+    else:
+        source_summary = f"sources={len(source_pairs)}"
+
     header = (
         f"image_id={example['image_id']} "
-        f"video_id={example['video_id']} "
-        f"frame_idx={example['frame_idx']} "
-        f"objects={len(boxes)}"
+        f"{source_summary} "
+        f"objects={len(object_records)}"
     )
     left, top, right, bottom = draw.textbbox((0, 0), header, font=font)
     header_width = right - left

@@ -10,7 +10,7 @@ from flowsis.utils import load_classes
 
 
 DEFAULT_MANIFEST_PATH = Path("data/manifests/frame_manifest.csv")
-DEFAULT_BOXES_DIR = Path("data/boxes")
+DEFAULT_BOXES_DIR = Path("data/bboxes")
 DEFAULT_CLASSES_PATH = Path("data/manifests/classes.json")
 DEFAULT_OUTPUT_PATH = Path("data/dataset")
 
@@ -80,14 +80,16 @@ def build_dataset(
                     "image_id": int(row["id"]),
                     "height": int(row["height"]),
                     "width": int(row["width"]),
-                    "video_id": int(video_id),
-                    "frame_idx": int(row["frame_idx"]),
-                    "objects": {
-                        "id": [bbox_id],
-                        "area": [bbox[2] * bbox[3]],
-                        "bbox": [bbox.tolist()],
-                        "category": [class_id],
-                    },
+                    "objects": [
+                        {
+                            "id": bbox_id,
+                            "area": float(bbox[2] * bbox[3]),
+                            "bbox": bbox.tolist(),
+                            "category": class_id,
+                            "video_id": int(video_id),
+                            "frame_idx": int(row["frame_idx"]),
+                        }
+                    ],
                 }
             )
             bbox_id += 1
@@ -102,14 +104,16 @@ def build_dataset(
             "image_id": Value("int64"),
             "height": Value("int64"),
             "width": Value("int64"),
-            "video_id": Value("int64"),
-            "frame_idx": Value("int64"),
-            "objects": {
-                "id": Sequence(Value("int64")),
-                "area": Sequence(Value("float32")),
-                "bbox": Sequence(Sequence(Value("float32"), length=4)),
-                "category": Sequence(ClassLabel(names=category_names)),
-            },
+            "objects": [
+                {
+                    "id": Value("int64"),
+                    "area": Value("float32"),
+                    "bbox": Sequence(Value("float32"), length=4),
+                    "category": ClassLabel(names=category_names),
+                    "video_id": Value("int64"),
+                    "frame_idx": Value("int64"),
+                }
+            ],
         }
     )
 

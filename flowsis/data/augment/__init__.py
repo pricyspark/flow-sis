@@ -1,16 +1,15 @@
-from .augment import (
-    AugmentationPipeline,
-    AugmentationContext,
-    TransformDataset,
-    overlap_augment,
+from __future__ import annotations
+
+from .classes import AugmentationContext, AugmentationPipeline, TransformDataset
+from .basic import (
     photometric_augment,
     roi_square_augment,
-    rotation_augment,
     translate_augment,
-    zoom_crop_augment,
     zoom_augment,
+    zoom_crop_augment,
 )
-from .prompts import LabelPrompts
+from .overlap import overlap_augment
+from .rotate import rotation_augment
 
 __all__ = [
     "TransformDataset",
@@ -23,5 +22,4 @@ __all__ = [
     "overlap_augment",
     "roi_square_augment",
     "rotation_augment",
-    "LabelPrompts",
 ]

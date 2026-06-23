@@ -10,8 +10,6 @@ from datasets import (
     Dataset, 
     DatasetDict, 
     Image as HFImage, 
-    IterableDataset, 
-    IterableDatasetDict, 
     load_dataset, 
     load_from_disk,
 )
@@ -32,6 +30,7 @@ from flowsis.data import (
     roi_square_augment, 
     rotation_augment,
 )
+from flowsis.data.object_records import get_object_feature_schema, get_object_records
 
 
 def parse_args() -> argparse.Namespace:
@@ -80,7 +79,7 @@ def log_event(name: str, payload: dict[str, Any]) -> None:
     print(name, payload)
 
 
-def load_detection_dataset(args: argparse.Namespace) -> DatasetDict | IterableDatasetDict:
+def load_detection_dataset(args: argparse.Namespace) -> DatasetDict:
     if args.dataset_name is not None:
         dataset = load_dataset(args.dataset_name, args.dataset_config)
     else:
@@ -89,12 +88,10 @@ def load_detection_dataset(args: argparse.Namespace) -> DatasetDict | IterableDa
             raise FileNotFoundError(f"Dataset path does not exist: {dataset_path}")
         dataset = load_from_disk(str(dataset_path))
 
-    if isinstance(dataset, (Dataset, IterableDataset)):
-        raise ValueError("Expected a dataset with named splits, but received a single split dataset.")
     return dataset
 
 
-def ensure_split_exists(dataset: DatasetDict | IterableDatasetDict, split_name: str, *, role: str) -> None:
+def ensure_split_exists(dataset: DatasetDict, split_name: str, *, role: str) -> None:
     if split_name not in dataset:
         raise KeyError(f"Missing {role} split '{split_name}' in dataset.")
 
@@ -104,16 +101,12 @@ def dataset_to_annotation(example: dict[str, Any]) -> dict[str, Any]:
         "image_id": int(example["image_id"]),
         "annotations": [
             {
-                "bbox": [float(value) for value in bbox],
-                "category_id": int(category_id),
-                "area": float(area),
+                "bbox": [float(value) for value in object_record["bbox"]],
+                "category_id": int(object_record["category"]),
+                "area": float(object_record["area"]),
                 "iscrowd": 0,
             }
-            for bbox, category_id, area in zip(
-                example["objects"]["bbox"],
-                example["objects"]["category"],
-                example["objects"]["area"],
-            )
+            for object_record in get_object_records(example)
         ],
     }
 
@@ -128,12 +121,13 @@ def collate_examples(batch: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def load_label_metadata(
-    dataset: DatasetDict | IterableDatasetDict,
+    dataset: DatasetDict,
     split_name: str,
 ) -> tuple[int, dict[int, str]]:
     split_features = dataset[split_name].features
     assert split_features is not None
-    category_feature = split_features["objects"]["category"]
+    object_schema = get_object_feature_schema(split_features["objects"])
+    category_feature = object_schema["category"]
     if hasattr(category_feature, "feature"):
         category_feature = category_feature.feature
     if not isinstance(category_feature, ClassLabel):
@@ -149,7 +143,7 @@ def load_label_metadata(
 
 
 def build_dataloader(
-    split_dataset: Dataset | IterableDataset,
+    split_dataset: Dataset,
     *,
     batch_size: int,
     num_workers: int,
@@ -159,7 +153,7 @@ def build_dataloader(
     generator = torch.Generator()
     generator.manual_seed(seed)
 
-    shuffle_batches = shuffle and not isinstance(split_dataset, IterableDataset)
+    shuffle_batches = shuffle
     return DataLoader(
         split_dataset,
         batch_size=batch_size,
@@ -191,7 +185,7 @@ def average_loss_dict(loss_sums: dict[str, float], count: int) -> dict[str, floa
 
 
 def sanity_decode_dataset(
-    dataset: DatasetDict | IterableDatasetDict,
+    dataset: DatasetDict,
     *,
     split_names: list[str],
     max_samples: int = 2,
@@ -246,7 +240,7 @@ def build_model(
     if resume_checkpoint is not None:
         return RTDetrV2.from_pretrained(str(resume_checkpoint), device=device)
 
-    return RTDetrV2(
+    return RTDetrV2.from_pretrained(
         model_name_or_path=model_name_or_path,
         num_labels=num_labels,
         id2label=id2label,
@@ -417,7 +411,7 @@ def save_final_model(model: RTDetrV2, output_dir: Path) -> Path:
 
 def run_inference_example(
     checkpoint_dir: str | Path,
-    dataset: DatasetDict | IterableDatasetDict,
+    dataset: DatasetDict,
     *,
     split: str,
     index: int,

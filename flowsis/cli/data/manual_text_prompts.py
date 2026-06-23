@@ -2,7 +2,7 @@ import argparse
 from pathlib import Path
 
 from flowsis.utils import load_classes
-from flowsis import LabelPrompts
+from flowsis.data import LabelPrompts
 
 
 DEFAULT_CLASSES_PATH = Path("data/manifests/classes.json")

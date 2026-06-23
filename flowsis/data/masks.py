@@ -2,6 +2,8 @@ import numpy as np
 from numpy.typing import NDArray
 from pathlib import Path
 
+from .object_records import resolve_object_source
+
 DEFAULT_MASKS_DIR = Path("data/masks")
 
 
@@ -15,9 +17,8 @@ def load_binary(path) -> NDArray[np.bool_]: # TODO: this should go in a general 
     return arr
 
 
-def load_mask(example: dict, path=None) -> NDArray[np.bool_]:
-    video_id = example["video_id"]
-    frame_idx = example["frame_idx"]
+def load_original_mask(example: dict, path=None) -> NDArray[np.bool_]:
+    video_id, frame_idx = resolve_object_source(example)
     if path is None:
         path = DEFAULT_MASKS_DIR
     mask_path = path / f"{video_id}" / f"{frame_idx}.npz"
