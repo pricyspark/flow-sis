@@ -1,10 +1,8 @@
-from __future__ import annotations
-
 import copy
 import math
 import random
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 from numpy.typing import NDArray
@@ -106,6 +104,29 @@ def compute_focus_index(
     size_weight: float = 0.15,
     center_weight: float = 0.10,
 ) -> int:
+    """
+    Pseudocode:
+    1. Read bounding boxes from example["objects"].
+    2. If there are no boxes, raise an error. If there is only one box, return index 0.
+    3. Compute each object's area as a fraction of the full image area, preferring mask
+       pixels when masks are attached and falling back to bounding-box area otherwise.
+    4. Mark boxes as valid when they satisfy the minimum area threshold.
+    5. If optional per-object metrics exist (visible fraction, largest component fraction,
+       confidence, stability), clamp them to [0, 1] and tighten the valid mask with any
+       configured minimum thresholds.
+    6. Build a size score by log-scaling box area fractions and normalizing them across
+       objects.
+    7. Build a center score by measuring how close each box center is to the image center.
+    8. Combine the available metric scores with the configured weights to produce one
+       focus score per object.
+    9. Restrict candidates to valid objects. If none are valid, fall back to all objects.
+    10. Pick the candidate with the highest score.
+    11. If multiple candidates tie, break the tie by preferring larger objects and then
+        slightly preferring more centered ones.
+    12. Return the chosen object index.
+    """
+    
+    # TODO: this is potentially expensive having to reload masks. It falls back to bboxes, but that's not ideal. Rethink how this should work. Also think how this potentially applicable to focusing on detections, not just focussed cropping for augmentation
     bboxes = get_bboxes(example["objects"])
     if len(bboxes) == 0:
         raise ValueError("compute_focus_index requires at least one bounding box.")
@@ -116,7 +137,12 @@ def compute_focus_index(
     height = max(float(example["height"]), 1.0)
     image_area = width * height
 
-    area_frac = np.clip((bboxes[:, 2] * bboxes[:, 3]) / image_area, 0.0, 1.0)
+    masks = get_object_masks(example)
+    if masks is not None and len(masks) == len(bboxes):
+        mask_area = np.asarray([mask.sum(dtype=np.int64) for mask in masks], dtype=np.float32)
+        area_frac = np.clip(mask_area / image_area, 0.0, 1.0)
+    else:
+        area_frac = np.clip((bboxes[:, 2] * bboxes[:, 3]) / image_area, 0.0, 1.0)
     valid = area_frac >= float(min_area_frac)
 
     objects = example["objects"]
@@ -354,7 +380,7 @@ def fit_example_to_canvas(example: dict[str, Any], *, width: int, height: int) -
 def count_connected_components(mask: NDArray[np.bool_]) -> tuple[int, float]:
     if not mask.any():
         return 0, 0.0
-    labeled, num_components = label(mask)
+    labeled, num_components = cast(tuple[NDArray[Any], int], label(mask))
     if num_components == 0:
         return 0, 0.0
     component_sizes = np.bincount(labeled.ravel())[1:]

@@ -5,6 +5,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 from datasets import ClassLabel, Dataset, DatasetDict, load_from_disk
 
+from flowsis.data.images import get_image
 from flowsis.data.object_records import get_object_feature_schema, get_object_records
 
 
@@ -63,7 +64,7 @@ def select_indices(length: int, *, num_samples: int, shuffle: bool, seed: int) -
 
 
 def draw_example(example: dict, *, id2label: dict[int, str]) -> Image.Image:
-    image = example["image"].convert("RGB")
+    image = get_image(example, convert_mode="RGB")
     canvas = image.copy()
     draw = ImageDraw.Draw(canvas)
     font = ImageFont.load_default()

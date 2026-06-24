@@ -6,11 +6,10 @@ from torch.optim import AdamW
 from torch.utils.data import DataLoader
 from transformers import get_scheduler
 from datasets import (
-    ClassLabel, 
-    Dataset, 
-    DatasetDict, 
-    Image as HFImage, 
-    load_dataset, 
+    ClassLabel,
+    Dataset,
+    DatasetDict,
+    load_dataset,
     load_from_disk,
 )
 
@@ -25,11 +24,12 @@ from flowsis.utils import (
     set_seed,
 )
 from flowsis.data import (
-    AugmentationPipeline, 
-    TransformDataset, 
+    AugmentationPipeline,
+    TransformDataset,
     roi_square_augment, 
     rotation_augment,
 )
+from flowsis.data.images import get_image, get_example_image_source
 from flowsis.data.object_records import get_object_feature_schema, get_object_records
 
 
@@ -87,6 +87,8 @@ def load_detection_dataset(args: argparse.Namespace) -> DatasetDict:
         if not dataset_path.exists():
             raise FileNotFoundError(f"Dataset path does not exist: {dataset_path}")
         dataset = load_from_disk(str(dataset_path))
+        if isinstance(dataset, Dataset):
+            raise TypeError("Dataset loaded. DatasetDict expected.")
 
     return dataset
 
@@ -113,7 +115,7 @@ def dataset_to_annotation(example: dict[str, Any]) -> dict[str, Any]:
 
 def collate_examples(batch: list[dict[str, Any]]) -> dict[str, Any]:
     return {
-        "images": [example["image"].convert("RGB") for example in batch],
+        "images": [get_image(example, convert_mode="RGB") for example in batch],
         "annotations": [dataset_to_annotation(example) for example in batch],
         "image_ids": [int(example["image_id"]) for example in batch],
         "orig_sizes": [(int(example["height"]), int(example["width"])) for example in batch],
@@ -197,15 +199,14 @@ def sanity_decode_dataset(
             continue
 
         split_dataset = dataset[split_name]
-        raw_split = split_dataset.cast_column("image", HFImage(decode=False))
         limit = min(len(split_dataset), max_samples - checked)
 
         for index in range(limit):
-            raw_image = raw_split[index]["image"]
-            image_source = raw_image.get("path") if isinstance(raw_image, dict) else raw_image
+            example = split_dataset[index]
+            image_source = get_example_image_source(example)
 
             try:
-                image = split_dataset[index]["image"].convert("RGB")
+                image = get_image(example, convert_mode="RGB")
             except Exception as exc:
                 raise RuntimeError(
                     f"Failed to decode dataset image for split='{split_name}' index={index} source={image_source!r}: {exc}"
@@ -421,7 +422,11 @@ def run_inference_example(
 ) -> None:
     model = RTDetrV2.from_pretrained(str(checkpoint_dir), device=device)
     sample = dataset[split][index]
-    inference = model.infer(sample["image"].convert("RGB"), image_size=image_size, threshold=threshold)
+    inference = model.infer(
+        get_image(sample, convert_mode="RGB"),
+        image_size=image_size,
+        threshold=threshold,
+    )
     first_detection = inference.detections[0]
     log_event(
         "inference_example",

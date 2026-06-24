@@ -4,7 +4,7 @@ import argparse
 import numpy as np
 from pathlib import Path
 from numpy.typing import NDArray
-from datasets import ClassLabel, Dataset, DatasetDict, Features, Image, Sequence, Value
+from datasets import ClassLabel, Dataset, DatasetDict, Features, Sequence, Value
 
 from flowsis.utils import load_classes
 
@@ -13,6 +13,10 @@ DEFAULT_MANIFEST_PATH = Path("data/manifests/frame_manifest.csv")
 DEFAULT_BOXES_DIR = Path("data/bboxes")
 DEFAULT_CLASSES_PATH = Path("data/manifests/classes.json")
 DEFAULT_OUTPUT_PATH = Path("data/dataset")
+
+
+def normalize_image_path(path: str) -> str:
+    return str(Path(path).expanduser().resolve())
 
 
 def parse_args() -> argparse.Namespace:
@@ -76,7 +80,7 @@ def build_dataset(
 
             rows.append(
                 {
-                    "image": row["output_path"],
+                    "image_path": normalize_image_path(row["output_path"]),
                     "image_id": int(row["id"]),
                     "height": int(row["height"]),
                     "width": int(row["width"]),
@@ -100,7 +104,7 @@ def build_dataset(
     category_names = [id2label[idx] for idx in range(len(id2label))]
     features = Features(
         {
-            "image": Image(),
+            "image_path": Value("string"),
             "image_id": Value("int64"),
             "height": Value("int64"),
             "width": Value("int64"),

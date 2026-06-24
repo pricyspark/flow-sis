@@ -7,6 +7,8 @@ from collections.abc import Callable, Iterable
 
 from torch.utils.data import Dataset
 
+from ..images import get_image
+
 
 DEFAULT_MASKS_DIR = Path("data/masks")
 
@@ -20,7 +22,9 @@ class AugmentationContext:
         return len(self.dataset)
 
     def get_example(self, index: int) -> dict[str, Any]:
-        return copy.deepcopy(self.dataset[index])
+        example = copy.deepcopy(self.dataset[index])
+        get_image(example)
+        return example
 
     def get_relative_example(self, offset: int, *, wrap: bool = True) -> dict[str, Any]:
         if len(self) == 0:
@@ -71,6 +75,7 @@ class TransformDataset(Dataset):
 
     def __getitem__(self, idx: int):
         example = copy.deepcopy(self.base_dataset[idx])
+        get_image(example)
         context = AugmentationContext(self.base_dataset, idx)
         return self.transform(example, augmentation_context=context)
 
