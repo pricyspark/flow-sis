@@ -10,7 +10,6 @@ from .augment import (
     zoom_crop_augment,
     zoom_augment,
 )
-from .prompts import LabelPrompts
 
 __all__ = [
     "TransformDataset",
@@ -23,5 +22,4 @@ __all__ = [
     "overlap_augment",
     "roi_square_augment",
     "rotation_augment",
-    "LabelPrompts",
 ]

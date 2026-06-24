@@ -166,7 +166,7 @@ def main() -> None:
             square_bgr = crop_center_square(frame_bgr)
             start_time = time.perf_counter()
             print(frame_rgb.shape)
-            inference = model.infer(square_rgb, image_size=args.image_size, threshold=args.threshold)
+            inference = model.infer([square_rgb], image_size=args.image_size, threshold=args.threshold)
             inference_ms = (time.perf_counter() - start_time) * 1000.0
 
             rendered_frame = draw_detections(

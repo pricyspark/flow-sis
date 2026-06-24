@@ -4,7 +4,7 @@ import warnings
 from os import PathLike
 from pathlib import Path
 
-from flowsis.pretrained import SigLIP2
+from flowsis.pretrained.siglip2 import SigLIP2
 from flowsis.utils import get_device
 
 

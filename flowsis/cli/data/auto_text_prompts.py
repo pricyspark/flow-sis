@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 from pathlib import Path
 
 from flowsis.utils import load_classes
-from flowsis.data import LabelPrompts
+from flowsis.data.prompts import LabelPrompts
 
 
 DEFAULT_MODEL = "gpt-5.4-mini"
