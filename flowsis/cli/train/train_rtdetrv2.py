@@ -31,7 +31,7 @@ from flowsis.data import (
 )
 from flowsis.data.images import get_image, get_example_image_source
 from flowsis.data.object_records import get_object_feature_schema, get_object_records
-
+from flowsis.data.augment import rotation_augment, roi_square_augment, center_square_augment
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train RT-DETRv2 on the HF detection dataset used by FlowSIS.")
@@ -470,20 +470,22 @@ def main() -> None:
         device=device,
     )
 
-    augments = []
-    augment_kwargs = []
+    loader = CallablePipeline((load_object_image, load_object_masks))
+    
+    train_augments = []
+    train_augment_kwargs = []
     if args.use_rotation_augment:
-        augments.append(rotation_augment)
-        augment_kwargs.append({"pad": 1})
+        train_augments.append(rotation_augment)
+        train_augment_kwargs.append({"pad": 1})
     if args.use_roi_square_augment:
-        augments.append(roi_square_augment)
-        augment_kwargs.append({"image_size": args.image_size})
+        train_augments.append(roi_square_augment)
+        train_augment_kwargs.append({"image_size": args.image_size})
 
-    if augments:
+    if train_augments:
         train_dataset = PreparedDataset(
             dataset[args.train_split],
-            loader=CallablePipeline([load_object_image, load_object_masks]),
-            transform=CallablePipeline(augments, augment_kwargs),
+            loader=loader,
+            augment=CallablePipeline(train_augments, train_augment_kwargs),
         )
         train_dataset = cast(Dataset, train_dataset) # To calm type checker on HF Dataset and torch Dataset
     else:
@@ -499,9 +501,10 @@ def main() -> None:
     
     val_dataset = PreparedDataset(
         dataset[args.validation_split],
-        loader=CallablePipeline([load_object_image, load_object_masks]),
-        transform=
+        loader=loader,
+        augment=CallablePipeline((center_square_augment,)),
     )
+    val_dataset = cast(Dataset, val_dataset)
 
     train_loader = build_dataloader(
         split_dataset=train_dataset,
@@ -514,7 +517,7 @@ def main() -> None:
     validation_loader = None
     if args.validation_split in dataset:
         validation_loader = build_dataloader(
-            dataset[args.validation_split],
+            split_dataset=val_dataset,
             batch_size=args.batch_size,
             num_workers=args.num_workers,
             shuffle=False,

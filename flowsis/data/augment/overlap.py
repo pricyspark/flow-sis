@@ -44,7 +44,7 @@ def _verify_overlap_example(
     connectivity: Literal[4, 8] = 8,
     masks: NDArray[np.bool_] | None = None,
     visible_masks: NDArray[np.bool_] | None = None,
-) -> None:
+) -> bool:
     if hard_threshold > soft_threshold:
         raise ValueError("Hard threshold cannot be higher than soft threshold.")
     objects = example["objects"]
@@ -53,7 +53,7 @@ def _verify_overlap_example(
     if visible_masks is None:
         visible_masks = np.array([obj["visible_mask"] for obj in objects], dtype=np.bool_)
     if len(objects) == 0:
-        return
+        return True
     if len(objects) != len(masks) or len(objects) != len(visible_masks):
         raise ValueError("Objects, masks, and visible_masks must have the same length.")
     if masks.ndim != 3 or visible_masks.ndim != 3:
@@ -95,7 +95,11 @@ def _verify_overlap_example(
         
         kept_objects.append(obj)
         
+    if not kept_objects:
+        return False
+        
     example["objects"] = kept_objects
+    return True
         
     
 

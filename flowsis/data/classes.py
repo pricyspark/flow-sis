@@ -9,7 +9,7 @@ from flowsis.utils.common import init_rng
 
 
 class RuntimeCallable(Protocol):
-    def __call__(self, x: Any, **kwargs: Any) -> Any:
+    def __call__(self, x: Any, /, **kwargs: Any) -> Any:
         ...
 
 

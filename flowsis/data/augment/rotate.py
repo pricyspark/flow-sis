@@ -10,28 +10,63 @@ from PIL import Image
 
 from ..masks import mask2xywh
 from .common import mask_union
+from flowsis.utils.common import init_rng
+
+
+def sample_rotation_angle(
+    width: int, 
+    height: int,
+    rng: np.random.Generator,
+    crop_loss_avoidance: float = 0.5, 
+    max_tries: int = 100,
+    **kwargs,
+) -> tuple[float, int, int, float, float]:
+    if not 0 <= crop_loss_avoidance <= 1:
+        raise ValueError("crop_loss_avoidance must be in [0, 1].")
+    
+    old_area = width * height
+    for _ in range(max_tries):
+        angle = rng.uniform(0.0, 360.0)
+        
+        width_crop, height_crop, dx, dy = rotate_crop_bounds(
+            width,
+            height,
+            math.radians(angle),
+        )
+        
+        width_crop, height_crop = round(width_crop), round(height_crop)
+        
+        new_area = width_crop * height_crop
+        kept_ratio = new_area / old_area
+        
+        accept_prob = (1.0 - crop_loss_avoidance) + crop_loss_avoidance * kept_ratio
+        
+        if rng.random() < accept_prob:
+            return angle, width_crop, height_crop, dx, dy
+        
+    angle = rng.choice((0.0, 90.0, 180.0, 270.0))
+    width_crop, height_crop, dx, dy = rotate_crop_bounds(
+        width,
+        height,
+        math.radians(angle),
+    )
+    
+    width_crop, height_crop = round(width_crop), round(height_crop)
+    return angle, width_crop, height_crop, dx, dy 
 
 
 def rotation_augment(example: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
-    # Set up RNG
-    rng = kwargs.get("rng", None)
-    seed = kwargs.get("seed", None)
-    
-    if rng is not None and seed is not None:
-        raise ValueError("Pass either 'rng' or 'seed', not both.")
-    
-    if rng is None:
-        rng = random.Random(seed)
+    rng = init_rng(kwargs.get("rng", None), kwargs.get("seed", None))
     
     img: Image.Image = example["image"]
     objects = example["objects"]
+    width, height = img.size
     
     # Load masks
     masks = np.array([obj["mask"] for obj in objects], dtype=np.bool_)
     m_union = mask_union(masks)
     
-    angle = rng.uniform(0, 360)
-    width, height = img.size
+    angle, width_crop, height_crop, dx, dy = sample_rotation_angle(width, height, rng, **kwargs)
     
     # Rotate masks and find crop size
     m_union_uint8 = m_union.astype(np.uint8, copy=False)
@@ -43,14 +78,7 @@ def rotation_augment(example: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
         fillcolor=0,
     )
     m_union_rot = np.asarray(m_union_img_rot) != 0
-    
-    width_rot, height_rot = m_union_rot.size
-    width_crop, height_crop, dx, dy = rotate_crop_bounds(
-        width, 
-        height, 
-        math.radians(angle)
-    )
-    width_crop, height_crop = round(width_crop), round(height_crop)
+    height_rot, width_rot = m_union_rot.shape
     
     # Find crop bounds
     union_bbox = mask2xywh(m_union_rot)
@@ -82,10 +110,8 @@ def rotation_augment(example: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
         expand=True,
         fillcolor=0,
     )
-    img_crop = img_rot.crop((col_start, row_start, col_end, row_end))
-    example["image"] = img_crop
-    example["modified"] = True
     
+    kept_objects = []
     # Rotate, crop, and update individual objects
     for obj, mask in zip(objects, masks):
         mask_uint8 = mask.astype(np.uint8, copy=False)
@@ -99,12 +125,23 @@ def rotation_augment(example: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
         mask_img_crop = mask_img_rot.crop((col_start, row_start, col_end, row_end))
         mask_crop = np.asarray(mask_img_crop) != 0
         bbox = mask2xywh(mask_crop)
-        assert bbox is not None
+        if bbox is None:
+            continue
         
         obj["mask"] = mask_crop
         obj["bbox"] = bbox
         obj["area"] = bbox[2] * bbox[3]
         obj["modified"] = True
+        
+        kept_objects.append(obj)
+        
+    if not kept_objects:
+        return example
+    
+    img_crop = img_rot.crop((col_start, row_start, col_end, row_end))
+    example["image"] = img_crop
+    example["objects"] = kept_objects
+    example["modified"] = True
         
     return example
 

@@ -219,17 +219,18 @@ def crop_augment(example: dict[str, Any], **kwargs) -> dict[str, Any]:
     x_offset = rng.integers(0, width - crop_width)
     y_offset = rng.integers(0, height - crop_height)
     
+    ''' 
     example = _crop_example_helper(
         example=example,
         left=x_offset,
         top=y_offset,
-        zoom_
     )
+    '''
     
     
 
 
-def translate_augment(example: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+def translate_augment(example: dict[str, Any], **kwargs) -> dict[str, Any]:
     probability = kwargs.get("probability", 1.0)
     if random.random() > probability:
         return example
@@ -259,7 +260,7 @@ def translate_augment(example: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
     )
 
 
-def zoom_augment(example: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+def zoom_augment(example: dict[str, Any], **kwargs) -> dict[str, Any]:
     probability = kwargs.get("probability", 1.0)
     if random.random() > probability:
         return example
@@ -276,7 +277,7 @@ def zoom_augment(example: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
     )
 
 
-def zoom_crop_augment(example: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+def zoom_crop_augment(example: dict[str, Any], **kwargs) -> dict[str, Any]:
     probability = kwargs.get("probability", 1.0)
     if random.random() > probability:
         return example
