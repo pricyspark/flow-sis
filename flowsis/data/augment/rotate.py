@@ -9,66 +9,60 @@ from numpy.typing import ArrayLike, NDArray
 from PIL import Image
 
 from ..masks import mask2xywh
-from .common import (
-    filter_object_fields,
-    get_object_masks,
-    rectangular_masks_from_bboxes,
-    set_bboxes,
-    set_object_masks,
-    compute_focus_index,
-)
+from .common import mask_union
 
 
 def rotation_augment(example: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
-    focus_kwargs = kwargs.get("focus_kwargs", {})
-    masks = get_object_masks(example, allow_mask_load=True)
-    if masks is None:
-        masks = rectangular_masks_from_bboxes(
-            example["objects"],
-            width=int(example["width"]),
-            height=int(example["height"]),
-        )
-    if not masks:
-        return example
-
-    focus_idx = compute_focus_index(example, **focus_kwargs)
-    focus_idx = max(0, min(focus_idx, len(masks) - 1))
-
-    angle = random.uniform(0, 360)
+    # Set up RNG
+    rng = kwargs.get("rng", None)
+    seed = kwargs.get("seed", None)
+    
+    if rng is not None and seed is not None:
+        raise ValueError("Pass either 'rng' or 'seed', not both.")
+    
+    if rng is None:
+        rng = random.Random(seed)
+    
     img: Image.Image = example["image"]
+    objects = example["objects"]
+    
+    # Load masks
+    masks = np.array([obj["mask"] for obj in objects], dtype=np.bool_)
+    m_union = mask_union(masks)
+    
+    angle = rng.uniform(0, 360)
     width, height = img.size
-    img_rot = img.rotate(
+    
+    # Rotate masks and find crop size
+    m_union_uint8 = m_union.astype(np.uint8, copy=False)
+    m_union_img = Image.fromarray(m_union_uint8)
+    m_union_img_rot = m_union_img.rotate(
         angle,
-        resample=Image.Resampling.BICUBIC,
+        resample=Image.Resampling.NEAREST,
         expand=True,
         fillcolor=0,
     )
-    width_rot, height_rot = img_rot.size
-    rotated_masks: list[NDArray[np.bool_]] = []
-    for mask in masks:
-        mask_img = Image.fromarray(mask.astype(np.uint8), mode="L")
-        mask_img_rot = mask_img.rotate(
-            angle,
-            resample=Image.Resampling.NEAREST,
-            expand=True,
-            fillcolor=0,
-        )
-        rotated_masks.append(np.asarray(mask_img_rot) > 0)
-
-    focus_union_mask = rotated_masks[focus_idx]
-    width_crop, height_crop, dx, dy = rotate_crop_bounds(width, height, math.radians(angle))
+    m_union_rot = np.asarray(m_union_img_rot) != 0
+    
+    width_rot, height_rot = m_union_rot.size
+    width_crop, height_crop, dx, dy = rotate_crop_bounds(
+        width, 
+        height, 
+        math.radians(angle)
+    )
     width_crop, height_crop = round(width_crop), round(height_crop)
-
-    bbox = mask2xywh(focus_union_mask)
-    assert bbox is not None
-    x, y, box_width, box_height = bbox
-    bbox_center = np.array((x + box_width / 2, y + box_height / 2))
+    
+    # Find crop bounds
+    union_bbox = mask2xywh(m_union_rot)
+    assert union_bbox is not None
+    x, y, w, h = union_bbox
+    bbox_center = np.array((x + w / 2, y + h / 2))
     frame_center = np.array((width_rot / 2, height_rot / 2))
     offset = bbox_center - frame_center
-
+    
     offset_proj = capped_projection(offset, (dx, dy))
     offset_proj = np.trunc(offset_proj).astype(np.int32)
-
+    
     width_diff = width_rot - width_crop
     height_diff = height_rot - height_crop
     col_start = width_diff // 2 + offset_proj[0]
@@ -80,23 +74,38 @@ def rotation_augment(example: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
         col_start += kwargs["pad"]
         row_end -= kwargs["pad"]
         col_end -= kwargs["pad"]
-    col_slice = slice(col_start, col_end)
-    row_slice = slice(row_start, row_end)
 
+    # Rotate, crop, and update image
+    img_rot = img.rotate(
+        angle,
+        resample=Image.Resampling.BICUBIC,
+        expand=True,
+        fillcolor=0,
+    )
     img_crop = img_rot.crop((col_start, row_start, col_end, row_end))
-    cropped_masks = [mask[row_slice, col_slice] for mask in rotated_masks]
-    keep = np.asarray([mask.any() for mask in cropped_masks], dtype=bool)
-    if keep.any():
-        filter_object_fields(example["objects"], keep)
-        cropped_masks = [mask for mask, keep_item in zip(cropped_masks, keep.tolist()) if keep_item]
-        cropped_bboxes = np.asarray([mask2xywh(mask) for mask in cropped_masks], dtype=np.float32)
-
-        example["image"] = img_crop
-        example["height"] = row_end - row_start
-        example["width"] = col_end - col_start
-        set_bboxes(example["objects"], cropped_bboxes)
-        set_object_masks(example, cropped_masks)
-
+    example["image"] = img_crop
+    example["modified"] = True
+    
+    # Rotate, crop, and update individual objects
+    for obj, mask in zip(objects, masks):
+        mask_uint8 = mask.astype(np.uint8, copy=False)
+        mask_img = Image.fromarray(mask_uint8)
+        mask_img_rot = mask_img.rotate(
+            angle,
+            resample=Image.Resampling.NEAREST,
+            expand=True,
+            fillcolor=0,
+        )
+        mask_img_crop = mask_img_rot.crop((col_start, row_start, col_end, row_end))
+        mask_crop = np.asarray(mask_img_crop) != 0
+        bbox = mask2xywh(mask_crop)
+        assert bbox is not None
+        
+        obj["mask"] = mask_crop
+        obj["bbox"] = bbox
+        obj["area"] = bbox[2] * bbox[3]
+        obj["modified"] = True
+        
     return example
 
 

@@ -84,6 +84,7 @@ def build_dataset(
                     "image_id": int(row["id"]),
                     "height": int(row["height"]),
                     "width": int(row["width"]),
+                    "modified": False,
                     "objects": [
                         {
                             "id": bbox_id,
@@ -92,6 +93,7 @@ def build_dataset(
                             "category": class_id,
                             "video_id": int(video_id),
                             "frame_idx": int(row["frame_idx"]),
+                            "modified": False,
                         }
                     ],
                 }
@@ -108,6 +110,7 @@ def build_dataset(
             "image_id": Value("int64"),
             "height": Value("int64"),
             "width": Value("int64"),
+            "modified": Value("bool"),
             "objects": [
                 {
                     "id": Value("int64"),
@@ -116,6 +119,7 @@ def build_dataset(
                     "category": ClassLabel(names=category_names),
                     "video_id": Value("int64"),
                     "frame_idx": Value("int64"),
+                    "modified": Value("bool"),
                 }
             ],
         }

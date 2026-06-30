@@ -9,11 +9,28 @@ from numpy.typing import NDArray
 from PIL import Image
 from scipy.ndimage import label
 
-from ..masks import load_original_mask, mask2xywh
+from ..masks import load_mask, mask2xywh
 
 
 DEFAULT_MASKS_DIR = Path("data/masks")
 
+
+def bounding_box_union(bboxes: NDArray) -> tuple[float, float, float, float]:
+    x1 = np.min(bboxes[:, 0])
+    y1 = np.min(bboxes[:, 1])
+    
+    x2 = np.max(bboxes[:, 0] + bboxes[:, 2])
+    y2 = np.max(bboxes[:, 1] + bboxes[:, 3])
+    
+    return float(x1), float(y1), float(x2 - x1), float(y2 - y1)
+
+
+def mask_union(masks: NDArray[np.bool_]) -> NDArray[np.bool_]:
+    if masks.ndim != 3:
+        raise ValueError("Masks must to passed as a 3D NumPy array.")
+    
+    return np.any(masks, axis=0)
+    
 
 def get_bboxes(objects: list[dict[str, Any]]) -> NDArray[np.float32]:
     bbox_values = [record["bbox"] for record in objects if "bbox" in record]
@@ -43,7 +60,7 @@ def get_object_masks(example: dict[str, Any], *, allow_mask_load: bool = False) 
         return [np.asarray(record["mask"], dtype=bool).copy() for record in objects]
     if allow_mask_load and len(objects) == 1:
         try:
-            return [np.asarray(load_original_mask(example), dtype=bool)]
+            return [np.asarray(load_mask(example), dtype=bool)]
         except FileNotFoundError:
             return None
     return None
@@ -57,159 +74,7 @@ def set_object_masks(example: dict[str, Any], masks: list[NDArray[np.bool_]]) ->
         record["mask"] = np.asarray(mask, dtype=bool).copy()
 
 
-def _get_object_metric(
-    objects: list[dict[str, Any]],
-    key: str,
-    *,
-    count: int,
-) -> NDArray[np.float32] | None:
-    if len(objects) != count:
-        return None
-    if any(key not in record for record in objects):
-        return None
-    values = [record[key] for record in objects]
-    metric = np.asarray(values, dtype=np.float32)
-    if metric.ndim != 1 or len(metric) != count:
-        return None
-    return metric
 
-
-def _normalize_scores(values: NDArray[np.float32]) -> NDArray[np.float32]:
-    if len(values) == 0:
-        return values
-
-    min_value = float(values.min())
-    max_value = float(values.max())
-    value_range = max_value - min_value
-    if math.isclose(value_range, 0):
-        return np.ones(len(values), dtype=np.float32)
-
-    return (values - min_value) / value_range
-
-
-def compute_focus_index(
-    example: dict[str, Any],
-    *,
-    confidence_key: str = "confidence",
-    stability_key: str = "stability",
-    visible_frac_key: str = "visible_frac",
-    largest_component_frac_key: str = "largest_component_frac",
-    min_area_frac: float = 0.01,
-    min_visible_frac: float | None = None,
-    min_largest_component_frac: float | None = None,
-    min_confidence: float | None = None,
-    min_stability: float | None = None,
-    confidence_weight: float = 0.30,
-    stability_weight: float = 0.45,
-    size_weight: float = 0.15,
-    center_weight: float = 0.10,
-) -> int:
-    """
-    Pseudocode:
-    1. Read bounding boxes from example["objects"].
-    2. If there are no boxes, raise an error. If there is only one box, return index 0.
-    3. Compute each object's area as a fraction of the full image area, preferring mask
-       pixels when masks are attached and falling back to bounding-box area otherwise.
-    4. Mark boxes as valid when they satisfy the minimum area threshold.
-    5. If optional per-object metrics exist (visible fraction, largest component fraction,
-       confidence, stability), clamp them to [0, 1] and tighten the valid mask with any
-       configured minimum thresholds.
-    6. Build a size score by log-scaling box area fractions and normalizing them across
-       objects.
-    7. Build a center score by measuring how close each box center is to the image center.
-    8. Combine the available metric scores with the configured weights to produce one
-       focus score per object.
-    9. Restrict candidates to valid objects. If none are valid, fall back to all objects.
-    10. Pick the candidate with the highest score.
-    11. If multiple candidates tie, break the tie by preferring larger objects and then
-        slightly preferring more centered ones.
-    12. Return the chosen object index.
-    """
-    
-    # TODO: this is potentially expensive having to reload masks. It falls back to bboxes, but that's not ideal. Rethink how this should work. Also think how this potentially applicable to focusing on detections, not just focussed cropping for augmentation
-    bboxes = get_bboxes(example["objects"])
-    if len(bboxes) == 0:
-        raise ValueError("compute_focus_index requires at least one bounding box.")
-    if len(bboxes) == 1:
-        return 0
-
-    width = max(float(example["width"]), 1.0)
-    height = max(float(example["height"]), 1.0)
-    image_area = width * height
-
-    masks = get_object_masks(example)
-    if masks is not None and len(masks) == len(bboxes):
-        mask_area = np.asarray([mask.sum(dtype=np.int64) for mask in masks], dtype=np.float32)
-        area_frac = np.clip(mask_area / image_area, 0.0, 1.0)
-    else:
-        area_frac = np.clip((bboxes[:, 2] * bboxes[:, 3]) / image_area, 0.0, 1.0)
-    valid = area_frac >= float(min_area_frac)
-
-    objects = example["objects"]
-    visible_frac = _get_object_metric(objects, visible_frac_key, count=len(bboxes))
-    if visible_frac is not None:
-        visible_frac = np.clip(visible_frac, 0.0, 1.0)
-        if min_visible_frac is not None:
-            valid &= visible_frac >= float(min_visible_frac)
-
-    largest_component_frac = _get_object_metric(objects, largest_component_frac_key, count=len(bboxes))
-    if largest_component_frac is not None:
-        largest_component_frac = np.clip(largest_component_frac, 0.0, 1.0)
-        if min_largest_component_frac is not None:
-            valid &= largest_component_frac >= float(min_largest_component_frac)
-
-    confidence = _get_object_metric(objects, confidence_key, count=len(bboxes))
-    if confidence is not None:
-        confidence = np.clip(confidence, 0.0, 1.0)
-        if min_confidence is not None:
-            valid &= confidence >= float(min_confidence)
-
-    stability = _get_object_metric(objects, stability_key, count=len(bboxes))
-    if stability is not None:
-        stability = np.clip(stability, 0.0, 1.0)
-        if min_stability is not None:
-            valid &= stability >= float(min_stability)
-
-    log_area = np.log(np.clip(area_frac, 1e-6, 1.0))
-    size_score = _normalize_scores(log_area)
-
-    center_x = bboxes[:, 0] + bboxes[:, 2] / 2
-    center_y = bboxes[:, 1] + bboxes[:, 3] / 2
-    dx = (center_x - width / 2) / max(width / 2, 1.0)
-    dy = (center_y - height / 2) / max(height / 2, 1.0)
-    center_distance = np.sqrt(dx * dx + dy * dy) / math.sqrt(2.0)
-    center_score = 1.0 - np.clip(center_distance, 0.0, 1.0)
-
-    score = np.zeros(len(bboxes), dtype=np.float32)
-    total_weight = 0.0
-    if stability is not None and stability_weight > 0:
-        score += float(stability_weight) * stability
-        total_weight += float(stability_weight)
-    if confidence is not None and confidence_weight > 0:
-        score += float(confidence_weight) * confidence
-        total_weight += float(confidence_weight)
-    if size_weight > 0:
-        score += float(size_weight) * size_score
-        total_weight += float(size_weight)
-    if center_weight > 0:
-        score += float(center_weight) * center_score
-        total_weight += float(center_weight)
-    if total_weight > 0:
-        score /= total_weight
-
-    candidate_indices = np.flatnonzero(valid)
-    if len(candidate_indices) == 0:
-        candidate_indices = np.arange(len(bboxes))
-
-    candidate_scores = score[candidate_indices]
-    best_local_index = int(np.argmax(candidate_scores))
-    tied_mask = np.isclose(candidate_scores, candidate_scores[best_local_index])
-    tied_indices = candidate_indices[tied_mask]
-    if len(tied_indices) == 1:
-        return int(tied_indices[0])
-
-    tie_break = area_frac[tied_indices] + 1e-3 * center_score[tied_indices]
-    return int(tied_indices[int(np.argmax(tie_break))])
 
 
 def rectangular_masks_from_bboxes(

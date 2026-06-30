@@ -1,222 +1,200 @@
 from __future__ import annotations
 
 import random
-from typing import Any
+from typing import Any, Literal, cast
 
 import numpy as np
 from numpy.typing import NDArray
 from PIL import Image
+from scipy import ndimage
 
 from ..masks import mask2xywh
-from .classes import AugmentationContext
 from .common import (
-    apply_translation,
-    apply_zoom,
-    count_connected_components,
-    fit_example_to_canvas,
-    get_object_masks,
-    random_translate_delta,
-    rectangular_masks_from_bboxes,
-    sample_overlay_count,
-    set_bboxes,
-    set_object_masks,
-    compute_focus_index,
+    mask_union,
 )
 
+from flowsis.utils.common import init_rng
 
-def overlap_augment(example: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
-    context: AugmentationContext | None = kwargs.get("augmentation_context")
+from ..classes import SampleContext
+
+
+def _count_connected_components(
+    mask: NDArray[np.bool_],
+    connectivity: Literal[4, 8] = 8
+) -> int:
+    if connectivity == 4:
+        structure = ndimage.generate_binary_structure(2, 1)
+    elif connectivity == 8:
+        structure = ndimage.generate_binary_structure(2, 2)
+    else:
+        raise ValueError("Connectivity must be 4 or 8")
+    
+    result = cast(
+        tuple[NDArray[np.int_], int],
+        ndimage.label(mask, structure=structure),
+    )
+    
+    return result[1]
+
+def _verify_overlap_example(
+    example: dict[str, Any], 
+    hard_threshold: float, 
+    soft_threshold: float, 
+    num_connected_components: int,
+    connectivity: Literal[4, 8] = 8,
+    masks: NDArray[np.bool_] | None = None,
+    visible_masks: NDArray[np.bool_] | None = None,
+) -> None:
+    if hard_threshold > soft_threshold:
+        raise ValueError("Hard threshold cannot be higher than soft threshold.")
+    objects = example["objects"]
+    if masks is None:
+        masks = np.array([obj["mask"] for obj in objects], dtype=np.bool_)
+    if visible_masks is None:
+        visible_masks = np.array([obj["visible_mask"] for obj in objects], dtype=np.bool_)
+    if len(objects) == 0:
+        return
+    if len(objects) != len(masks) or len(objects) != len(visible_masks):
+        raise ValueError("Objects, masks, and visible_masks must have the same length.")
+    if masks.ndim != 3 or visible_masks.ndim != 3:
+        raise ValueError("Masks and visible_masks must be shaped as (num_objects, height, width).")
+
+    visible_area = np.sum(visible_masks, axis=(1, 2), dtype=np.float32)
+    total_area = np.sum(masks, axis=(1, 2), dtype=np.float32)
+    visible_ratios = np.divide(
+        visible_area,
+        total_area,
+        out=np.zeros(len(masks)),
+        where=total_area > 0,
+    )
+    valid = visible_ratios >= soft_threshold
+    maybe = (visible_ratios < soft_threshold) & (visible_ratios >= hard_threshold)
+    
+    for i, visible_mask in enumerate(visible_masks):
+        if not maybe[i] or visible_area[i] == 0:
+            continue
+        
+        connected_components = _count_connected_components(visible_mask, connectivity)
+        if connected_components <= num_connected_components:
+            valid[i] = True
+            
+    kept_objects = []
+    for i, (v, obj) in enumerate(zip(valid, objects)):
+        if not v:
+            continue
+        
+        current_mask = visible_masks[i]
+        bbox = mask2xywh(current_mask)
+        assert bbox is not None
+        obj["bbox"] = bbox
+        obj["area"] = bbox[2] * bbox[3]
+        obj["mask"] = current_mask
+        #obj["visible_mask"] = current_mask
+        obj.pop("visible_mask", None)
+        obj["modified"] = True
+        
+        kept_objects.append(obj)
+        
+    example["objects"] = kept_objects
+        
+    
+
+
+def overlap_augment(
+    example: dict[str, Any], 
+    *,
+    context: SampleContext,
+    **kwargs
+) -> dict[str, Any]:
+    rng = init_rng(kwargs.get("rng", None), kwargs.get("seed", None))
+    
     if context is None:
         raise ValueError(
             "overlap_augment requires kwargs['augmentation_context']. "
             "Use it through TransformDataset/AugmentationPipeline with an indexable dataset."
         )
-    focus_kwargs = kwargs.get("focus_kwargs", {})
-
-    probability = kwargs.get("probability", 1.0)
-    if random.random() > probability:
-        return example
-
-    max_overlays = int(kwargs.get("max_overlays", kwargs.get("num_overlays", 1)))
-    num_overlays = sample_overlay_count(
-        max_overlays=max_overlays,
-        distribution=kwargs.get("count_distribution", "fixed"),
-        mean_overlays=kwargs.get("mean_overlays"),
-        geometric_p=kwargs.get("geometric_p"),
+        
+    img: Image.Image = example["image"]
+    objects = example["objects"]
+    height = example["height"]
+    width = example["width"]
+    
+    base_masks = np.array([obj["mask"] for obj in objects], dtype=np.bool_)
+        
+    min_overlay = kwargs.get("min_overlays", 0)
+    max_overlay = kwargs.get("max_overlays", min_overlay)
+    p = kwargs.get("p", 0.5)
+    if max_overlay < min_overlay:
+        raise ValueError("max_overlays must be greater than or equal to min_overlays.")
+    if not 0 <= p < 1:
+        raise ValueError("p must satisfy 0 <= p < 1.")
+    
+    num_additional_samples = min(
+        rng.geometric(1 - p) - 1,
+        max_overlay - min_overlay
     )
-    if num_overlays <= 0:
-        return example
+    num_samples = min_overlay + num_additional_samples
+    
+    overlay_examples = context.sample_examples(num_samples, rng=rng)
 
-    width = int(example["width"])
-    height = int(example["height"])
-
-    base_masks = get_object_masks(example, allow_mask_load=True)
-    if base_masks is None:
-        base_masks = rectangular_masks_from_bboxes(example["objects"], width=width, height=height)
-    set_object_masks(example, base_masks)
-    focus_idx = compute_focus_index(example, **focus_kwargs)
-    focus_idx = max(0, min(focus_idx, len(base_masks) - 1))
-    base_video_ids = [record["video_id"] for record in example["objects"]]
-    base_frame_indices = [record["frame_idx"] for record in example["objects"]]
-
-    overlay_examples = context.sample_examples(
-        num_overlays,
-        exclude_current=kwargs.get("exclude_current", True),
-        replace=kwargs.get("replace", False),
-    )
-
-    overlay_layers: list[dict[str, Any]] = []
+    currently_blocked_mask = np.zeros((height, width), dtype=np.bool_)
+    
+    all_objects: list[dict[str, Any]] = []
+    all_masks: list[NDArray[np.bool_]] = []
+    all_visible_masks: list[NDArray[np.bool_]] = []
+    
     for overlay_example in overlay_examples:
-        overlay_example = fit_example_to_canvas(overlay_example, width=width, height=height)
-
-        overlay_scale_range = kwargs.get("scale_range")
-        if overlay_scale_range is not None:
-            overlay_example = apply_zoom(
-                overlay_example,
-                scale=random.uniform(*overlay_scale_range),
-                fillcolor=kwargs.get("fillcolor", 0),
-            )
-
-        max_translate_frac = kwargs.get("max_translate_frac")
-        max_translate_x_frac = kwargs.get("max_translate_x_frac", max_translate_frac)
-        max_translate_y_frac = kwargs.get("max_translate_y_frac", max_translate_frac)
-        dx = random_translate_delta(max_shift_frac=max_translate_x_frac, size=width)
-        dy = random_translate_delta(max_shift_frac=max_translate_y_frac, size=height)
-        overlay_example = apply_translation(
-            overlay_example,
-            dx=dx,
-            dy=dy,
-            fillcolor=kwargs.get("fillcolor", 0),
+        overlay_img = overlay_example["image"]
+        overlay_objects = overlay_example["objects"]
+        overlay_masks = np.array([obj["mask"] for obj in overlay_objects], dtype=np.bool_)
+        if overlay_img.width != width or overlay_img.height != height:
+            raise ValueError("Overlay example image size must match the target canvas size.")
+        if overlay_masks.ndim != 3:
+            raise ValueError("Overlay masks must be shaped as (num_objects, height, width).")
+        if overlay_masks.shape[1:] != (height, width):
+            raise ValueError("Overlay masks must match the target canvas size.")
+        
+        currently_visible_mask = ~currently_blocked_mask
+        visible_overlay_masks = overlay_masks & currently_visible_mask
+        
+        for obj, full_mask, visible_mask in zip(overlay_objects, overlay_masks, visible_overlay_masks):
+            obj["visible_mask"] = visible_mask
+            all_objects.append(obj)
+            all_masks.append(full_mask)
+            all_visible_masks.append(visible_mask)
+    
+        overlay_mask_union = mask_union(overlay_masks)
+        currently_visible_overlay_mask = overlay_mask_union & currently_visible_mask
+        mask_pil = Image.fromarray(
+            currently_visible_overlay_mask.astype(np.uint8) * 255, 
+            mode='L',
         )
+        img.paste(overlay_img, (0, 0), mask_pil)
+        currently_blocked_mask |= overlay_mask_union
 
-        overlay_masks = get_object_masks(overlay_example, allow_mask_load=True)
-        if overlay_masks is None:
-            overlay_masks = rectangular_masks_from_bboxes(
-                overlay_example["objects"],
-                width=width,
-                height=height,
-            )
-        if not overlay_masks:
-            continue
+    currently_visible_mask = ~currently_blocked_mask
+    visible_base_masks = base_masks & currently_visible_mask
+    for obj, full_mask, visible_mask in zip(objects, base_masks, visible_base_masks):
+        obj["visible_mask"] = visible_mask
+        all_objects.append(obj)
+        all_masks.append(full_mask)
+        all_visible_masks.append(visible_mask)
 
-        overlay_layers.append(
-            {
-                "pixels": np.asarray(overlay_example["image"].convert("RGB")),
-                "masks": [np.asarray(mask, dtype=bool) for mask in overlay_masks],
-                "categories": [int(record["category"]) for record in overlay_example["objects"]],
-                "video_ids": [record["video_id"] for record in overlay_example["objects"]],
-                "frame_indices": [record["frame_idx"] for record in overlay_example["objects"]],
-            }
-        )
-
-    min_primary_visible_frac = float(kwargs.get("min_primary_visible_frac", 0.6))
-    kept_layers = list(overlay_layers)
-    while kept_layers:
-        all_overlay_masks = [mask for layer in kept_layers for mask in layer["masks"]]
-        if not all_overlay_masks:
-            break
-        occluder_union = np.any(np.stack(all_overlay_masks, axis=0), axis=0)
-        focus_mask = base_masks[focus_idx]
-        total_area = float(focus_mask.sum())
-        visible_area = float((focus_mask & ~occluder_union).sum())
-        visible_frac = 0.0 if total_area == 0 else visible_area / total_area
-        if visible_frac >= min_primary_visible_frac:
-            break
-        kept_layers.pop()
-
-    composed_pixels = np.asarray(example["image"].convert("RGB")).copy()
-    for layer in kept_layers:
-        union_mask = np.any(np.stack(layer["masks"], axis=0), axis=0)
-        composed_pixels[union_mask] = layer["pixels"][union_mask]
-
-    object_records: list[dict[str, Any]] = []
-    for index, (mask, category, video_id, frame_idx) in enumerate(
-        zip(base_masks, [record["category"] for record in example["objects"]], base_video_ids, base_frame_indices)
-    ):
-        object_records.append(
-            {
-                "mask": np.asarray(mask, dtype=bool),
-                "id": len(object_records),
-                "category": int(category),
-                "video_id": video_id,
-                "frame_idx": frame_idx,
-                "is_focus": index == focus_idx,
-            }
-        )
-    for layer in kept_layers:
-        for mask, category, video_id, frame_idx in zip(
-            layer["masks"],
-            layer["categories"],
-            layer["video_ids"],
-            layer["frame_indices"],
-        ):
-            object_records.append(
-                {
-                    "mask": np.asarray(mask, dtype=bool),
-                    "id": len(object_records),
-                    "category": int(category),
-                    "video_id": video_id,
-                    "frame_idx": frame_idx,
-                    "is_focus": False,
-                }
-            )
-
-    min_visible_frac = float(kwargs.get("min_visible_frac", 0.6))
-    max_components = kwargs.get("max_components", 3)
-    min_largest_component_frac = float(kwargs.get("min_largest_component_frac", 0.7))
-    annotate_overlays = bool(kwargs.get("annotate_overlays", True))
-
-    visible_records: list[dict[str, Any]] = []
-    occluder_union = np.zeros((height, width), dtype=bool)
-    for record in reversed(object_records):
-        full_mask = record["mask"]
-        visible_mask = full_mask & ~occluder_union
-        occluder_union |= full_mask
-
-        total_area = float(full_mask.sum())
-        visible_area = float(visible_mask.sum())
-        visible_frac = 0.0 if total_area == 0 else visible_area / total_area
-        component_count, largest_component_frac = count_connected_components(visible_mask)
-
-        visible_records.append(
-            {
-                **record,
-                "visible_mask": visible_mask,
-                "visible_frac": visible_frac,
-                "component_count": component_count,
-                "largest_component_frac": largest_component_frac,
-            }
-        )
-    visible_records.reverse()
-
-    kept_records: list[dict[str, Any]] = []
-    for record in visible_records:
-        visible_mask = record["visible_mask"]
-        if not visible_mask.any():
-            continue
-        if record["is_focus"]:
-            keep_annotation = True
-        else:
-            keep_annotation = annotate_overlays and record["visible_frac"] >= min_visible_frac
-            if max_components is not None:
-                keep_annotation = keep_annotation and record["component_count"] <= int(max_components)
-            keep_annotation = keep_annotation and record["largest_component_frac"] >= min_largest_component_frac
-        if keep_annotation:
-            kept_records.append(
-                {
-                    "id": len(kept_records),
-                    "category": record["category"],
-                    "video_id": record["video_id"],
-                    "frame_idx": record["frame_idx"],
-                    "mask": visible_mask,
-                }
-            )
-
-    example["image"] = Image.fromarray(composed_pixels)
-    example["width"] = width
-    example["height"] = height
-    example["objects"] = kept_records
-    if kept_records:
-        kept_bboxes = np.asarray([mask2xywh(record["mask"]) for record in kept_records], dtype=np.float32)
-        set_bboxes(example["objects"], kept_bboxes)
+    example["objects"] = all_objects
+      
+    hard_threshold = kwargs.get("hard_threshold", 0.5)
+    soft_threshold = kwargs.get("soft_threshold", 0.75)
+    num_connected_components = kwargs.get("num_connected_components", 3)
+    connectivity = kwargs.get("connectivity", 8)
+        
+    _verify_overlap_example(
+        example,
+        hard_threshold=hard_threshold,
+        soft_threshold=soft_threshold,
+        num_connected_components=num_connected_components,
+        connectivity=connectivity,
+        masks=np.asarray(all_masks, dtype=np.bool_),
+        visible_masks=np.asarray(all_visible_masks, dtype=np.bool_),
+    )
+    
     return example

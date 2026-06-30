@@ -4,11 +4,10 @@ from PIL import Image, ImageEnhance
 import numpy as np
 import random
 from scipy.ndimage import zoom
-
+import random
 
 from .common import (
     get_bboxes, 
-    compute_focus_index, 
     set_bboxes, 
     random_translate_delta, 
     apply_zoom, 
@@ -17,67 +16,154 @@ from .common import (
     get_object_masks,
     set_object_masks,
     resize_mask,
+    bounding_box_union,
 )
 
-def roi_square_augment(example: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
-    image_size = kwargs["image_size"]
-    focus_kwargs = kwargs.get("focus_kwargs", {})
+from flowsis.utils.common import init_rng
+from ..classes import SampleContext
 
+
+def _crop_example_helper(example, left, top, width, height, zoom_factor, bboxes):
     img: Image.Image = example["image"]
-    width, height = img.size
-    crop_size = min(width, height)
-    zoom_factor = image_size / crop_size
-
     objects = example["objects"]
-    bboxes = get_bboxes(objects).astype(float, copy=False)
-    focus_idx = compute_focus_index(example, **focus_kwargs)
-    focus_bbox = bboxes[focus_idx]
-    x1 = float(focus_bbox[0])
-    y1 = float(focus_bbox[1])
-    x2 = float(focus_bbox[0] + focus_bbox[2])
-    y2 = float(focus_bbox[1] + focus_bbox[3])
-    union_bbox_center = [(x1 + x2) / 2, (y1 + y2) / 2]
-
-    if width < height:
-        left = 0
-        right = crop_size
-        max_top = height - crop_size
-        top = int(np.clip(round(union_bbox_center[1] - crop_size / 2), 0, max_top))
-        bottom = top + crop_size
-    else:
-        top = 0
-        bottom = crop_size
-        max_left = width - crop_size
-        left = int(np.clip(round(union_bbox_center[0] - crop_size / 2), 0, max_left))
-        right = left + crop_size
-    crop_bounds = (left, top, right, bottom)
-
-    img = img.crop(crop_bounds)
-    img = img.resize((image_size, image_size), resample=Image.Resampling.LANCZOS)
-
-    x1 = np.clip(bboxes[:, 0] - left, 0, crop_size)
-    y1 = np.clip(bboxes[:, 1] - top, 0, crop_size)
-    x2 = np.clip(bboxes[:, 0] + bboxes[:, 2] - left, 0, crop_size)
-    y2 = np.clip(bboxes[:, 1] + bboxes[:, 3] - top, 0, crop_size)
-
-    resized_bboxes = np.stack((x1, y1, x2 - x1, y2 - y1), axis=1) * zoom_factor
-    set_bboxes(objects, resized_bboxes)
+    right = left + width
+    bottom = top + height
+    img = img.crop((left, top, right, bottom))
+    img = img.resize((width, height), resample=Image.Resampling.LANCZOS)
+    
+    bboxes[:, 0] -= left
+    bboxes[:, 1] -= top
+    bboxes *= zoom_factor
+    
     example["image"] = img
-    example["width"] = image_size
-    example["height"] = image_size
-
-    for object_record in objects:
-        if "mask" not in object_record:
-            continue
-        cropped_mask = np.asarray(object_record["mask"], dtype=bool)[top:bottom, left:right]
-        object_record["mask"] = zoom(cropped_mask, zoom_factor, order=0) > 0
-
+    example["height"] = height
+    example["width"] = width
+    example["modified"] = True
+    for obj, bbox in zip(objects, bboxes):
+        obj["bbox"] = bbox.tolist()
+        obj["area"] = float(bbox[2] * bbox[3])
+        obj["modified"] = True
+        
+        if "mask" in obj:
+            mask = obj["mask"]
+            mask_cropped = mask[top:bottom, left:right]
+            mask_resized = np.asarray(
+                Image.fromarray(mask_cropped.astype(np.uint8)).resize(
+                    (width, height),
+                    resample=Image.Resampling.NEAREST,
+                )
+            ).astype(bool)
+            obj["mask"] = mask_resized
+            
     return example
 
 
-def photometric_augment(example: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+def center_square_augment(example: dict[str, Any], **kwargs) -> dict[str, Any]:
+    img: Image.Image = example["image"]
+    objects = example["objects"]
+    bboxes = np.array([obj["bbox"] for obj in objects], dtype=float)
+    
+    width, height = img.size
+    short_edge = min(width, height)
+    final_size = kwargs["crop_size"] if "crop_size" in kwargs else short_edge
+    zoom_factor = final_size / short_edge
+    
+    left = (width - final_size) // 2
+    top = (height - final_size) // 2
+    
+    example = _crop_example_helper(
+        example=example,
+        left=left,
+        top=top,
+        width=final_size,
+        height=final_size,
+        zoom_factor=zoom_factor,
+        bboxes=bboxes,
+    )
+    return example
+
+
+def random_square_augment(example: dict[str, Any], **kwargs) -> dict[str, Any]:
+    rng = kwargs.get("rng", None)
+    seed = kwargs.get("seed", None)
+    
+    if rng is not None and seed is not None:
+        raise ValueError("Pass either 'rng' or 'seed', not both.")
+    
+    if rng is None:
+        rng = random.Random(seed)
+        
+    img: Image.Image = example["image"]
+    objects = example["objects"]
+    bboxes = np.array([obj["bbox"] for obj in objects], dtype=float)
+    
+    width, height = img.size
+    short_edge = min(width, height)
+    final_size = kwargs["crop_size"] if "crop_size" in kwargs else short_edge
+    long_edge = max(width, height)
+    zoom_factor = final_size / short_edge
+    
+    # TODO: this doesn't work if final_size != short_edge
+    offset = rng.randint(0, long_edge - final_size)
+    if width < height:
+        left = 0
+        top = offset
+    else:
+        top = 0
+        left = offset
+    
+    example = _crop_example_helper(
+        example=example,
+        left=left,
+        top=top,
+        width=final_size,
+        height=final_size,
+        zoom_factor=zoom_factor,
+        bboxes=bboxes,
+    )
+    return example
+    
+
+def roi_square_augment(example: dict[str, Any], **kwargs) -> dict[str, Any]:
+    img: Image.Image = example["image"]
+    objects = example["objects"]
+    bboxes = np.array([obj["bbox"] for obj in objects], dtype=float)
+    
+    width, height = img.size
+    short_edge = min(width, height)
+    final_size = kwargs["crop_size"] if "crop_size" in kwargs else short_edge
+    zoom_factor = final_size / short_edge
+    
+    
+    union_x, union_y, union_w, union_h = bounding_box_union(bboxes)
+    union_center_x = union_x + union_w / 2
+    union_center_y = union_y + union_h / 2
+    if width < height:
+        left = 0
+        top = round(union_center_y - final_size / 2)
+        top = max(0, min(top, height - final_size))
+    else:
+        left = round(union_center_x - final_size / 2)
+        left = max(0, min(left, width - final_size))
+        top = 0
+    
+    example = _crop_example_helper(
+        example=example,
+        left=left,
+        top=top,
+        width=final_size,
+        height=final_size,
+        zoom_factor=zoom_factor,
+        bboxes=bboxes,
+    )
+    return example
+
+
+def photometric_augment(example: dict[str, Any], **kwargs) -> dict[str, Any]:
     probability = kwargs.get("probability", 1.0)
-    if random.random() > probability:
+
+    rng = init_rng(kwargs.get("rng", None), kwargs.get("seed", None))
+    if rng.random() > probability:
         return example
 
     image = example["image"].convert("RGB")
@@ -87,15 +173,60 @@ def photometric_augment(example: dict[str, Any], **kwargs: Any) -> dict[str, Any
         (ImageEnhance.Color, kwargs.get("color", (0.8, 1.2))),
         (ImageEnhance.Sharpness, kwargs.get("sharpness", (0.8, 1.2))),
     ]
-    random.shuffle(enhancer_ranges)
+
+    rng.shuffle(enhancer_ranges)
 
     for enhancer_type, factor_range in enhancer_ranges:
         lower, upper = factor_range
-        factor = random.uniform(lower, upper)
+        factor = rng.uniform(lower, upper)
         image = enhancer_type(image).enhance(factor)
 
     example["image"] = image
     return example
+
+# EVERY DOWNWARDS IS BAD AND REQUIRES REIMPLEMENTATION
+
+def crop_augment(example: dict[str, Any], **kwargs) -> dict[str, Any]:
+    probability = kwargs.get("probability", 1.0)
+    min_size = kwargs.get("min_size", None)
+    max_size = kwargs.get("max_size", None)
+    height = example["height"]
+    width = example["width"]
+    
+    if min_size is None:
+        min_size = max_size        
+    if max_size is None:
+        max_size = min_size
+    if min_size is None and max_size is None:
+        raise ValueError("Minimum and maximimum crop size cannot both be None.")
+    assert min_size is not None
+    assert max_size is not None
+
+    if min_size > max_size:
+        raise ValueError("Minimum crop size cannot be greater than maximimum.")
+
+    rng = init_rng(kwargs.get("rng", None), kwargs.get("seed", None))
+    if rng.random() > probability:
+        return example
+    
+    size_range = max_size - min_size
+    
+    image = example["image"]
+    crop_ratio = rng.random() * size_range + min_size
+    crop_height = round(crop_ratio * height)
+    crop_width = round(crop_ratio * width)
+    
+    x_offset = rng.integers(0, width - crop_width)
+    y_offset = rng.integers(0, height - crop_height)
+    
+    example = _crop_example_helper(
+        example=example,
+        left=x_offset,
+        top=y_offset,
+        zoom_
+    )
+    
+    
 
 
 def translate_augment(example: dict[str, Any], **kwargs: Any) -> dict[str, Any]:

@@ -24,10 +24,10 @@ from flowsis.utils import (
     set_seed,
 )
 from flowsis.data import (
-    AugmentationPipeline,
-    TransformDataset,
-    roi_square_augment, 
-    rotation_augment,
+    PreparedDataset,
+    CallablePipeline,
+    load_object_image, 
+    load_object_masks,
 )
 from flowsis.data.images import get_image, get_example_image_source
 from flowsis.data.object_records import get_object_feature_schema, get_object_records
@@ -480,13 +480,14 @@ def main() -> None:
         augment_kwargs.append({"image_size": args.image_size})
 
     if augments:
-        train_split_dataset = TransformDataset(
+        train_dataset = PreparedDataset(
             dataset[args.train_split],
-            AugmentationPipeline(augments, augment_kwargs),
+            loader=CallablePipeline([load_object_image, load_object_masks]),
+            transform=CallablePipeline(augments, augment_kwargs),
         )
-        train_split_dataset = cast(Dataset, train_split_dataset) # To calm type checker on HF Dataset and torch Dataset
+        train_dataset = cast(Dataset, train_dataset) # To calm type checker on HF Dataset and torch Dataset
     else:
-        train_split_dataset = cast(Dataset, dataset[args.train_split])
+        train_dataset = cast(Dataset, dataset[args.train_split])
 
     log_event(
         "train_augmentations",
@@ -495,9 +496,15 @@ def main() -> None:
             "use_roi_square_augment": args.use_roi_square_augment,
         },
     )
+    
+    val_dataset = PreparedDataset(
+        dataset[args.validation_split],
+        loader=CallablePipeline([load_object_image, load_object_masks]),
+        transform=
+    )
 
     train_loader = build_dataloader(
-        split_dataset=train_split_dataset,
+        split_dataset=train_dataset,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
         shuffle=not args.overfit_single_batch,
