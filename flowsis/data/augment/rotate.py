@@ -61,6 +61,7 @@ def rotation_augment(example: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
     img: Image.Image = example["image"]
     objects = example["objects"]
     width, height = img.size
+    # TODO: add handling for if input has no objects
     
     # Load masks
     masks = np.array([obj["mask"] for obj in objects], dtype=np.bool_)
@@ -135,11 +136,12 @@ def rotation_augment(example: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
         
         kept_objects.append(obj)
         
+    # TODO: maybe accept empty
+    img_crop = img_rot.crop((col_start, row_start, col_end, row_end))
+    example["image"] = img_crop
     if not kept_objects:
         return example
     
-    img_crop = img_rot.crop((col_start, row_start, col_end, row_end))
-    example["image"] = img_crop
     example["objects"] = kept_objects
     example["modified"] = True
         

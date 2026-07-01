@@ -101,8 +101,6 @@ def _verify_overlap_example(
     example["objects"] = kept_objects
     return True
         
-    
-
 
 def overlap_augment(
     example: dict[str, Any], 

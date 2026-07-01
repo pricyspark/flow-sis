@@ -20,7 +20,6 @@ from .common import (
 )
 
 from flowsis.utils.common import init_rng
-from ..classes import SampleContext
 
 
 def _crop_example_helper(example, left, top, width, height, zoom_factor, bboxes):
@@ -31,14 +30,18 @@ def _crop_example_helper(example, left, top, width, height, zoom_factor, bboxes)
     img = img.crop((left, top, right, bottom))
     img = img.resize((width, height), resample=Image.Resampling.LANCZOS)
     
-    bboxes[:, 0] -= left
-    bboxes[:, 1] -= top
-    bboxes *= zoom_factor
-    
     example["image"] = img
     example["height"] = height
     example["width"] = width
     example["modified"] = True
+    
+    if not objects:
+        return example
+    
+    bboxes[:, 0] -= left
+    bboxes[:, 1] -= top
+    bboxes *= zoom_factor
+    
     for obj, bbox in zip(objects, bboxes):
         obj["bbox"] = bbox.tolist()
         obj["area"] = float(bbox[2] * bbox[3])
@@ -84,14 +87,7 @@ def center_square_augment(example: dict[str, Any], **kwargs) -> dict[str, Any]:
 
 
 def random_square_augment(example: dict[str, Any], **kwargs) -> dict[str, Any]:
-    rng = kwargs.get("rng", None)
-    seed = kwargs.get("seed", None)
-    
-    if rng is not None and seed is not None:
-        raise ValueError("Pass either 'rng' or 'seed', not both.")
-    
-    if rng is None:
-        rng = random.Random(seed)
+    rng = init_rng(kwargs.get("rng", None), kwargs.get("seed", None))
         
     img: Image.Image = example["image"]
     objects = example["objects"]
@@ -104,7 +100,7 @@ def random_square_augment(example: dict[str, Any], **kwargs) -> dict[str, Any]:
     zoom_factor = final_size / short_edge
     
     # TODO: this doesn't work if final_size != short_edge
-    offset = rng.randint(0, long_edge - final_size)
+    offset = rng.integers(long_edge - final_size)
     if width < height:
         left = 0
         top = offset
@@ -127,13 +123,15 @@ def random_square_augment(example: dict[str, Any], **kwargs) -> dict[str, Any]:
 def roi_square_augment(example: dict[str, Any], **kwargs) -> dict[str, Any]:
     img: Image.Image = example["image"]
     objects = example["objects"]
+    if not objects:
+        return random_square_augment(example, **kwargs)
+    
     bboxes = np.array([obj["bbox"] for obj in objects], dtype=float)
     
     width, height = img.size
     short_edge = min(width, height)
     final_size = kwargs["crop_size"] if "crop_size" in kwargs else short_edge
-    zoom_factor = final_size / short_edge
-    
+    zoom_factor = final_size / short_edge    
     
     union_x, union_y, union_w, union_h = bounding_box_union(bboxes)
     union_center_x = union_x + union_w / 2
