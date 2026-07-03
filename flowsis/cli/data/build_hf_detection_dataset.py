@@ -15,17 +15,19 @@ DEFAULT_CLASSES_PATH = Path("data/manifests/classes.json")
 DEFAULT_OUTPUT_PATH = Path("data/dataset")
 
 
-def normalize_image_path(path: str) -> str:
-    return str(Path(path).expanduser().resolve())
-
-
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Build the Hugging Face detection dataset used by FlowSIS.")
+    parser = argparse.ArgumentParser(
+        description = "Build the Hugging Face detection dataset used by FlowSIS.",
+    )
     parser.add_argument("--manifest_path", type=Path, default=DEFAULT_MANIFEST_PATH)
     parser.add_argument("--boxes_dir", type=Path, default=DEFAULT_BOXES_DIR)
     parser.add_argument("--classes_path", type=Path, default=DEFAULT_CLASSES_PATH)
     parser.add_argument("--output_path", type=Path, default=DEFAULT_OUTPUT_PATH)
     return parser.parse_args()
+
+
+def normalize_image_path(path: str) -> str:
+    return str(Path(path).expanduser().resolve())
 
 
 def load_boxes(boxes_dir: Path) -> dict[str, NDArray[np.float32]]:

@@ -95,16 +95,16 @@ def draw_text_block(
 
 def draw_detections(
     frame_bgr: Any,
-    detection: Mapping[str, Any],
+    detections: Mapping[str, Any],
     *,
     id2label: dict[int, str],
     inference_ms: float,
 ) -> Any:
     rendered = frame_bgr.copy()
 
-    boxes = detection["boxes"].detach().cpu().tolist()
-    scores = detection["scores"].detach().cpu().tolist()
-    labels = detection["labels"].detach().cpu().tolist()
+    boxes = detections["boxes"].detach().cpu().tolist()
+    scores = detections["scores"].detach().cpu().tolist()
+    labels = detections["labels"].detach().cpu().tolist()
 
     for box, score, label_id in zip(boxes, scores, labels):
         x1, y1, x2, y2 = [int(round(value)) for value in box]
