@@ -138,6 +138,7 @@ def overlap_augment(
     num_samples = min_overlay + num_additional_samples
     
     overlay_examples = context.sample_examples(num_samples, rng=rng)
+    overlay_prepare = kwargs.get("overlay_prepare")
 
     currently_blocked_mask = np.zeros((height, width), dtype=np.bool_)
     
@@ -145,7 +146,15 @@ def overlap_augment(
     all_masks: list[NDArray[np.bool_]] = []
     all_visible_masks: list[NDArray[np.bool_]] = []
     
-    for overlay_example in overlay_examples:
+    for overlay_index, overlay_example in enumerate(overlay_examples):
+        if overlay_prepare is not None:
+            prepare_kwargs: dict[str, Any] = {}
+            if "seed" in kwargs and kwargs["seed"] is not None:
+                prepare_kwargs["seed"] = int(kwargs["seed"]) * 1000 + overlay_index + 1
+            prepared_overlay = overlay_prepare(overlay_example, **prepare_kwargs)
+            if prepared_overlay is not None:
+                overlay_example = prepared_overlay
+
         overlay_img = overlay_example["image"]
         overlay_objects = overlay_example["objects"]
         overlay_masks = np.array([obj["mask"] for obj in overlay_objects], dtype=np.bool_)

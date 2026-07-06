@@ -78,6 +78,24 @@ def parse_args() -> argparse.Namespace:
         help="Apply overlap compositing during online-image stages.",
     )
     parser.add_argument(
+        "--overlap_min_overlays",
+        type=int,
+        default=1,
+        help="Minimum number of samples to composite when overlap augmentation is enabled.",
+    )
+    parser.add_argument(
+        "--overlap_max_overlays",
+        type=int,
+        default=1,
+        help="Maximum number of samples to composite when overlap augmentation is enabled.",
+    )
+    parser.add_argument(
+        "--overlap_p",
+        type=float,
+        default=0.5,
+        help="Geometric continuation parameter used to sample additional overlap layers.",
+    )
+    parser.add_argument(
         "--use_photometric_augment",
         action=argparse.BooleanOptionalAction,
         default=False,
@@ -250,8 +268,16 @@ def build_online_dataset(split_dataset: Dataset, args: argparse.Namespace) -> Da
         augmentations.append(roi_square_augment)
         augmentation_kwargs.append({"crop_size": args.image_size})
     if args.use_overlap_augment:
+        overlay_prepare = CallablePipeline(augmentations, augmentation_kwargs)
         augmentations.append(overlap_augment)
-        augmentation_kwargs.append({})
+        augmentation_kwargs.append(
+            {
+                "min_overlays": args.overlap_min_overlays,
+                "max_overlays": args.overlap_max_overlays,
+                "p": args.overlap_p,
+                "overlay_prepare": overlay_prepare,
+            }
+        )
     if args.use_photometric_augment:
         augmentations.append(photometric_augment)
         augmentation_kwargs.append({})

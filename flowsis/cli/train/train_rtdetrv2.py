@@ -31,7 +31,15 @@ from flowsis.data import (
 )
 from flowsis.data.images import get_image, get_example_image_source
 from flowsis.data.object_records import get_object_feature_schema, get_object_records
-from flowsis.data.augment import rotation_augment, roi_square_augment, center_square_augment
+from flowsis.data.augment import (
+    center_square_augment,
+    overlap_augment,
+    photometric_augment,
+    roi_square_augment,
+    rotation_augment,
+)
+
+AugmentationStep = tuple[str, Any, dict[str, Any]]
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train RT-DETRv2 on the HF detection dataset used by FlowSIS.")
@@ -71,6 +79,36 @@ def parse_args() -> argparse.Namespace:
         action=argparse.BooleanOptionalAction,
         default=True,
         help="Apply object-centered square cropping during training.",
+    )
+    parser.add_argument(
+        "--use_overlap_augment",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Apply overlap compositing during training.",
+    )
+    parser.add_argument(
+        "--overlap_min_overlays",
+        type=int,
+        default=1,
+        help="Minimum number of samples to composite when overlap augmentation is enabled.",
+    )
+    parser.add_argument(
+        "--overlap_max_overlays",
+        type=int,
+        default=1,
+        help="Maximum number of samples to composite when overlap augmentation is enabled.",
+    )
+    parser.add_argument(
+        "--overlap_p",
+        type=float,
+        default=0.5,
+        help="Geometric continuation parameter used to sample additional overlap layers.",
+    )
+    parser.add_argument(
+        "--use_photometric_augment",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Apply photometric augmentation during training.",
     )
     return parser.parse_args()
 
@@ -163,6 +201,49 @@ def build_dataloader(
         num_workers=num_workers,
         collate_fn=collate_examples,
         generator=generator,
+    )
+
+
+def build_detection_loader() -> CallablePipeline:
+    return CallablePipeline((load_object_image, load_object_masks))
+
+
+def build_train_augmentation_steps(args: argparse.Namespace) -> list[AugmentationStep]:
+    steps: list[AugmentationStep] = []
+    if args.use_rotation_augment:
+        steps.append(("rotation_augment", rotation_augment, {"pad": 1}))
+    if args.use_roi_square_augment:
+        steps.append(("roi_square_augment", roi_square_augment, {"crop_size": args.image_size}))
+    if args.use_overlap_augment:
+        overlay_prepare = build_augmentation_pipeline(steps)
+        steps.append(
+            (
+                "overlap_augment",
+                overlap_augment,
+                {
+                    "min_overlays": args.overlap_min_overlays,
+                    "max_overlays": args.overlap_max_overlays,
+                    "p": args.overlap_p,
+                    "overlay_prepare": overlay_prepare,
+                },
+            )
+        )
+    if args.use_photometric_augment:
+        steps.append(("photometric_augment", photometric_augment, {}))
+    return steps
+
+
+def build_validation_augmentation_steps(args: argparse.Namespace) -> list[AugmentationStep]:
+    return [("center_square_augment", center_square_augment, {"crop_size": args.image_size})]
+
+
+def build_augmentation_pipeline(steps: list[AugmentationStep]) -> CallablePipeline | None:
+    if not steps:
+        return None
+
+    return CallablePipeline(
+        [callable_ for _, callable_, _ in steps],
+        [kwargs for _, _, kwargs in steps],
     )
 
 
@@ -470,22 +551,15 @@ def main() -> None:
         device=device,
     )
 
-    loader = CallablePipeline((load_object_image, load_object_masks))
-    
-    train_augments = []
-    train_augment_kwargs = []
-    if args.use_rotation_augment:
-        train_augments.append(rotation_augment)
-        train_augment_kwargs.append({"pad": 1})
-    if args.use_roi_square_augment:
-        train_augments.append(roi_square_augment)
-        train_augment_kwargs.append({"image_size": args.image_size})
+    loader = build_detection_loader()
+    train_augmentation_steps = build_train_augmentation_steps(args)
+    train_augment = build_augmentation_pipeline(train_augmentation_steps)
 
-    if train_augments:
+    if train_augment is not None:
         train_dataset = PreparedDataset(
             dataset[args.train_split],
             loader=loader,
-            augment=CallablePipeline(train_augments, train_augment_kwargs),
+            augment=train_augment,
         )
         train_dataset = cast(Dataset, train_dataset) # To calm type checker on HF Dataset and torch Dataset
     else:
@@ -496,13 +570,15 @@ def main() -> None:
         {
             "use_rotation_augment": args.use_rotation_augment,
             "use_roi_square_augment": args.use_roi_square_augment,
+            "use_overlap_augment": args.use_overlap_augment,
+            "use_photometric_augment": args.use_photometric_augment,
         },
     )
     
     val_dataset = PreparedDataset(
         dataset[args.validation_split],
         loader=loader,
-        augment=CallablePipeline((center_square_augment,)),
+        augment=build_augmentation_pipeline(build_validation_augmentation_steps(args)),
     )
     val_dataset = cast(Dataset, val_dataset)
 

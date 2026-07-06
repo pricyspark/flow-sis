@@ -18,31 +18,48 @@ from .common import (
     resize_mask,
     bounding_box_union,
 )
+from ..masks import mask2xywh
 
 from flowsis.utils.common import init_rng
 
 
-def _crop_example_helper(example, left, top, width, height, zoom_factor, bboxes):
+def _crop_example_helper(
+    example,
+    left,
+    top,
+    crop_width,
+    crop_height,
+    output_width,
+    output_height,
+    zoom_factor,
+    bboxes,
+):
     img: Image.Image = example["image"]
     objects = example["objects"]
-    right = left + width
-    bottom = top + height
+    right = left + crop_width
+    bottom = top + crop_height
     img = img.crop((left, top, right, bottom))
-    img = img.resize((width, height), resample=Image.Resampling.LANCZOS)
+    img = img.resize((output_width, output_height), resample=Image.Resampling.LANCZOS)
     
     example["image"] = img
-    example["height"] = height
-    example["width"] = width
+    example["height"] = output_height
+    example["width"] = output_width
     example["modified"] = True
     
     if not objects:
         return example
     
-    bboxes[:, 0] -= left
-    bboxes[:, 1] -= top
-    bboxes *= zoom_factor
+    x1 = bboxes[:, 0] - left
+    y1 = bboxes[:, 1] - top
+    x2 = x1 + bboxes[:, 2]
+    y2 = y1 + bboxes[:, 3]
+    x1 = np.clip(x1, 0.0, crop_width)
+    y1 = np.clip(y1, 0.0, crop_height)
+    x2 = np.clip(x2, 0.0, crop_width)
+    y2 = np.clip(y2, 0.0, crop_height)
+    cropped_boxes = np.stack((x1, y1, x2 - x1, y2 - y1), axis=1) * zoom_factor
     
-    for obj, bbox in zip(objects, bboxes):
+    for obj, bbox in zip(objects, cropped_boxes):
         obj["bbox"] = bbox.tolist()
         obj["area"] = float(bbox[2] * bbox[3])
         obj["modified"] = True
@@ -52,11 +69,15 @@ def _crop_example_helper(example, left, top, width, height, zoom_factor, bboxes)
             mask_cropped = mask[top:bottom, left:right]
             mask_resized = np.asarray(
                 Image.fromarray(mask_cropped.astype(np.uint8)).resize(
-                    (width, height),
+                    (output_width, output_height),
                     resample=Image.Resampling.NEAREST,
                 )
             ).astype(bool)
             obj["mask"] = mask_resized
+            mask_bbox = mask2xywh(mask_resized)
+            if mask_bbox is not None:
+                obj["bbox"] = mask_bbox
+                obj["area"] = float(mask_bbox[2] * mask_bbox[3])
             
     return example
 
@@ -71,15 +92,17 @@ def center_square_augment(example: dict[str, Any], **kwargs) -> dict[str, Any]:
     final_size = kwargs["crop_size"] if "crop_size" in kwargs else short_edge
     zoom_factor = final_size / short_edge
     
-    left = (width - final_size) // 2
-    top = (height - final_size) // 2
+    left = (width - short_edge) // 2
+    top = (height - short_edge) // 2
     
     example = _crop_example_helper(
         example=example,
         left=left,
         top=top,
-        width=final_size,
-        height=final_size,
+        crop_width=short_edge,
+        crop_height=short_edge,
+        output_width=final_size,
+        output_height=final_size,
         zoom_factor=zoom_factor,
         bboxes=bboxes,
     )
@@ -99,8 +122,8 @@ def random_square_augment(example: dict[str, Any], **kwargs) -> dict[str, Any]:
     long_edge = max(width, height)
     zoom_factor = final_size / short_edge
     
-    # TODO: this doesn't work if final_size != short_edge
-    offset = rng.integers(long_edge - final_size)
+    max_offset = long_edge - short_edge
+    offset = 0 if max_offset <= 0 else int(rng.integers(max_offset + 1))
     if width < height:
         left = 0
         top = offset
@@ -112,8 +135,10 @@ def random_square_augment(example: dict[str, Any], **kwargs) -> dict[str, Any]:
         example=example,
         left=left,
         top=top,
-        width=final_size,
-        height=final_size,
+        crop_width=short_edge,
+        crop_height=short_edge,
+        output_width=final_size,
+        output_height=final_size,
         zoom_factor=zoom_factor,
         bboxes=bboxes,
     )
@@ -138,19 +163,21 @@ def roi_square_augment(example: dict[str, Any], **kwargs) -> dict[str, Any]:
     union_center_y = union_y + union_h / 2
     if width < height:
         left = 0
-        top = round(union_center_y - final_size / 2)
-        top = max(0, min(top, height - final_size))
+        top = round(union_center_y - short_edge / 2)
+        top = max(0, min(top, height - short_edge))
     else:
-        left = round(union_center_x - final_size / 2)
-        left = max(0, min(left, width - final_size))
+        left = round(union_center_x - short_edge / 2)
+        left = max(0, min(left, width - short_edge))
         top = 0
     
     example = _crop_example_helper(
         example=example,
         left=left,
         top=top,
-        width=final_size,
-        height=final_size,
+        crop_width=short_edge,
+        crop_height=short_edge,
+        output_width=final_size,
+        output_height=final_size,
         zoom_factor=zoom_factor,
         bboxes=bboxes,
     )
