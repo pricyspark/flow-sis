@@ -1,13 +1,21 @@
-channels: 
+name: flowsis
+channels:
   - conda-forge
 dependencies:
-  - python
+  - python=3.13
   - pip
+  - einops
+  - h5py
+  - loguru
   - numpy
   - matplotlib
+  - pandas
+  - plotly
   - pytorch
   - torchvision
-  - opencv
+  - requests
+  - tabulate
+  - tensorboard
   - transformers
   - accelerate
   - datasets
@@ -17,5 +25,11 @@ dependencies:
   - jupyter
   - openai
   - pydantic
+  - lightning
+  - timm
+  - pypng
   - pip:
     - kernels==0.14.1
+    - kaleido
+    - opencv-python
+    - ptlflow==0.4.2
