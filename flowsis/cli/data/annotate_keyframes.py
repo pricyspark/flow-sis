@@ -76,8 +76,8 @@ def collect_session_config() -> SessionConfig:
     print("\nSession setup")
     print("Leave optional values blank if you want to enter them per video.\n")
 
-    video_dir_raw = prompt_optional("Video directory")
     text_prompt = prompt_optional("Default text prompt")
+    video_dir_raw = prompt_optional("Video frame directory")
     out_mask_dir_raw = prompt_optional("Default output mask directory")
     out_bbox_dir_raw = prompt_optional("Default output bounding box directory")
 
@@ -210,7 +210,7 @@ def run_session() -> None:
                     f_stem = job.keyframes[i].stem
                     frame_idx = int(f_stem.partition('-')[2].partition('_')[0])
                     print(f"mask location {job.out_mask_dir / f"{frame_idx}.npz"}")
-                    #save_binary(job.out_mask_dir / f"{frame_idx}.npz", mask)
+                    save_binary(job.out_mask_dir / f"{frame_idx}.npz", mask)
                     
                     xyxy = output["boxes"][0].cpu().numpy() # TODO: fix
                     xywh = xyxy.copy()
@@ -219,7 +219,7 @@ def run_session() -> None:
                     all_boxes[i] = xywh
                     
                 print(f"box location {job.out_bbox_dir / f"{job.video_path.stem}.npy"}")
-                #np.save(job.out_bbox_dir / f"{job.video_path.stem}.npy", all_boxes)
+                np.save(job.out_bbox_dir / f"{job.video_path.stem}.npy", all_boxes)
                 
             again = yes_no("\nAnnotate another video? [Y/n]: ")
             if not again:
