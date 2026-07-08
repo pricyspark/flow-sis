@@ -1,4 +1,5 @@
 import math
+import re
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
@@ -7,6 +8,7 @@ from pathlib import Path
 from dataclasses import dataclass
 from transformers import Sam3VideoModel, Sam3VideoProcessor
 
+from flowsis.data.masks import mask2xywh
 from flowsis.utils import get_device
 
 
@@ -176,6 +178,69 @@ def annotate_video(
     return outputs_per_frame
 
 
+def extract_output_masks(output: dict | None) -> np.ndarray:
+    if output is None:
+        return np.zeros((0, 0, 0), dtype=np.bool_)
+
+    masks = output.get("masks")
+    if masks is None:
+        return np.zeros((0, 0, 0), dtype=np.bool_)
+
+    if isinstance(masks, torch.Tensor):
+        masks = masks.detach().cpu().numpy()
+    else:
+        masks = np.asarray(masks)
+
+    if masks.size == 0:
+        return np.zeros((0, 0, 0), dtype=np.bool_)
+
+    if masks.ndim == 2:
+        masks = masks[np.newaxis, ...]
+    if masks.ndim != 3:
+        raise ValueError(f"Expected masks with shape (N, H, W), received {masks.shape}.")
+
+    return masks.astype(np.bool_, copy=False)
+
+
+def merge_frame_annotation(
+    output: dict | None,
+    frame_shape: tuple[int, int],
+) -> tuple[np.ndarray, np.ndarray, int]:
+    masks = extract_output_masks(output)
+    height, width = frame_shape
+
+    if len(masks) == 0:
+        return np.zeros((height, width), dtype=np.bool_), np.zeros(4, dtype=np.int64), 0
+
+    merged_mask = np.any(masks, axis=0)
+    bbox = mask2xywh(merged_mask)
+    if bbox is None:
+        bbox_xywh = np.zeros(4, dtype=np.int64)
+    else:
+        bbox_xywh = np.asarray(bbox, dtype=np.int64)
+
+    return merged_mask, bbox_xywh, len(masks)
+
+
+def summarize_outputs(outputs_per_frame: dict, num_frames: int) -> tuple[int, int]:
+    empty_frames = 0
+    multi_mask_frames = 0
+    for frame_idx in range(num_frames):
+        num_masks = len(extract_output_masks(outputs_per_frame.get(frame_idx)))
+        if num_masks == 0:
+            empty_frames += 1
+        elif num_masks > 1:
+            multi_mask_frames += 1
+    return empty_frames, multi_mask_frames
+
+
+def parse_frame_number(frame_path: Path) -> int:
+    match = re.search(r"frame-(\d+)", frame_path.stem)
+    if match is None:
+        raise ValueError(f"Unable to parse frame number from {frame_path.name}.")
+    return int(match.group(1))
+
+
 def yes_no(prompt) -> bool:
     while True:
         response = input(prompt).strip().lower()
@@ -200,22 +265,33 @@ def run_session() -> None:
                 break
 
             outputs_per_frame = annotate_video(config.model, config.processor, job)
-            tile_masks(outputs_per_frame, job.tensor, 5)
+            empty_frames, multi_mask_frames = summarize_outputs(outputs_per_frame, len(job.keyframes))
+            print(
+                "annotation_summary",
+                {
+                    "frames": len(job.keyframes),
+                    "empty_frames": empty_frames,
+                    "multi_mask_frames": multi_mask_frames,
+                },
+            )
+            tile_masks(outputs_per_frame, job.tensor, 5, frame_paths=job.keyframes)
             
             save = yes_no("\nSave? [Y/n]: ")
             if save:
-                all_boxes = np.empty((len(outputs_per_frame), 4), dtype=np.int64)
-                for i, output in outputs_per_frame.items():
-                    mask = output["masks"][0].cpu().numpy()
-                    f_stem = job.keyframes[i].stem
-                    frame_idx = int(f_stem.partition('-')[2].partition('_')[0])
+                all_boxes = np.zeros((len(job.keyframes), 4), dtype=np.int64)
+                for i, frame_path in enumerate(job.keyframes):
+                    output = outputs_per_frame.get(i)
+                    mask, xywh, _ = merge_frame_annotation(
+                        output,
+                        frame_shape=tuple(job.tensor.shape[1:3]),
+                    )
+                    frame_idx = parse_frame_number(frame_path)
                     print(f"mask location {job.out_mask_dir / f"{frame_idx}.npz"}")
-                    save_binary(job.out_mask_dir / f"{frame_idx}.npz", mask)
-                    
-                    xyxy = output["boxes"][0].cpu().numpy() # TODO: fix
-                    xywh = xyxy.copy()
-                    xywh[:, 2] = xyxy[:, 2] - xyxy[:, 0]
-                    xywh[:, 3] = xyxy[:, 3] - xyxy[:, 1]
+                    job.out_bbox_dir.mkdir(parents=True, exist_ok=True)
+                    save_binary(
+                        job.out_mask_dir / f"{frame_idx}.npz", 
+                        mask,
+                    )
                     all_boxes[i] = xywh
                     
                 print(f"box location {job.out_bbox_dir / f"{job.video_path.stem}.npy"}")
@@ -236,39 +312,164 @@ def run_session() -> None:
             
 
 def show_mask(mask, ax, obj_id=None, random_color=False):
+    mask = np.asarray(mask, dtype=np.bool_)
+    if mask.ndim != 2 or mask.size == 0 or not mask.any():
+        return
+
     if random_color:
         color = np.concatenate([np.random.random(3), np.array([0.6])], axis=0)
     else:
         cmap = plt.get_cmap("tab10")
         cmap_idx = 0 if obj_id is None else obj_id
         color = np.array([*cmap(cmap_idx)[:3], 0.6])
-    h, w = mask.shape[-2:]
-    mask_image = mask.reshape(h, w, 1) * color.reshape(1, 1, -1)
+    mask_image = mask[..., np.newaxis] * color.reshape(1, 1, -1)
     ax.imshow(mask_image)
-    
-def tile_masks(outputs_per_frame: dict, keyframe_batch: torch.Tensor, n_cols: int):
+
+
+def show_output_masks(output: dict | None, ax) -> int:
+    masks = extract_output_masks(output)
+    if len(masks) == 0:
+        return 0
+
+    object_ids = output.get("object_ids") if output is not None else None
+    if isinstance(object_ids, torch.Tensor):
+        object_ids = object_ids.detach().cpu().tolist()
+    elif object_ids is None:
+        object_ids = list(range(len(masks)))
+
+    for mask, obj_id in zip(masks, object_ids):
+        show_mask(mask, ax, obj_id=obj_id)
+
+    return len(masks)
+
+
+def resize_image_for_display(image: np.ndarray, max_size: int) -> np.ndarray:
+    height, width = image.shape[:2]
+    longest_side = max(height, width)
+    if longest_side <= max_size:
+        return image
+
+    scale = max_size / longest_side
+    resized_width = max(1, int(round(width * scale)))
+    resized_height = max(1, int(round(height * scale)))
+    return np.asarray(
+        Image.fromarray(image).resize((resized_width, resized_height), resample=Image.Resampling.BILINEAR)
+    )
+
+
+def resize_masks_for_display(masks: np.ndarray, image_shape: tuple[int, int]) -> np.ndarray:
+    if len(masks) == 0:
+        height, width = image_shape
+        return np.zeros((0, height, width), dtype=np.bool_)
+
+    resized_masks = []
+    for mask in masks:
+        mask_image = Image.fromarray(mask.astype(np.uint8, copy=False) * 255)
+        resized_mask = mask_image.resize((image_shape[1], image_shape[0]), resample=Image.Resampling.NEAREST)
+        resized_masks.append(np.asarray(resized_mask) > 0)
+    return np.stack(resized_masks, axis=0)
+
+
+def draw_tile(
+    ax,
+    frame_idx: int,
+    output: dict | None,
+    keyframe_batch: torch.Tensor,
+    max_frame_size: int,
+    frame_paths: list[Path] | None,
+) -> None:
+    frame_image = keyframe_batch[frame_idx].cpu().numpy()
+    display_image = resize_image_for_display(frame_image, max_frame_size)
+    ax.imshow(display_image)
+    ax.axis("off")
+
+    masks = extract_output_masks(output)
+    display_masks = resize_masks_for_display(masks, display_image.shape[:2])
+    output_for_display = None if output is None else dict(output)
+    if output_for_display is None:
+        output_for_display = {"masks": display_masks}
+    else:
+        output_for_display["masks"] = display_masks
+
+    num_masks = show_output_masks(output_for_display, ax)
+    display_frame_number = frame_idx
+    if frame_paths is not None:
+        display_frame_number = parse_frame_number(frame_paths[frame_idx])
+
+    ax.text(
+        0.03,
+        0.97,
+        f"{display_frame_number} | {num_masks}",
+        color="white",
+        fontsize=9,
+        ha="left",
+        va="top",
+        transform=ax.transAxes,
+        bbox={"facecolor": "black", "alpha": 0.65, "pad": 2},
+    )
+    if num_masks == 0:
+        ax.text(
+            0.5,
+            0.5,
+            "0 masks",
+            color="white",
+            fontsize=9,
+            ha="center",
+            va="center",
+            transform=ax.transAxes,
+            bbox={"facecolor": "black", "alpha": 0.55, "pad": 3},
+        )
+
+
+def tile_masks(
+    outputs_per_frame: dict,
+    keyframe_batch: torch.Tensor,
+    n_cols: int,
+    max_frame_size: int = 512,
+    frame_paths: list[Path] | None = None,
+    max_rows_per_figure: int = 4,
+):
     plt.close("all")
     
-    n_rows = int(math.ceil(len(outputs_per_frame) / n_cols))
-    
-    fig, axes = plt.subplots(n_rows, n_cols, figsize=(n_cols * 2.7, n_rows * 4.8), squeeze=False)
-    
-    axes_flat = axes.ravel()
-    
-    for i, ax in enumerate(axes_flat):
-        if i >= len(outputs_per_frame):
-            ax.axis("off")
-            continue
-        
-        ax.imshow(keyframe_batch[i].cpu().numpy())
-        ax.axis("off")
-        try:
-            show_mask(outputs_per_frame[i]["masks"].cpu().numpy(), ax)
-        except Exception as e:
-            print(i)
-            print(e)
-    plt.tight_layout()
-    plt.show()
+    num_frames = int(keyframe_batch.shape[0])
+    if num_frames == 0:
+        return
+
+    frames_per_figure = max(1, n_cols * max_rows_per_figure)
+    sample_image = resize_image_for_display(keyframe_batch[0].cpu().numpy(), max_frame_size)
+    sample_height, sample_width = sample_image.shape[:2]
+    tile_width = 2.4
+    tile_height = max(1.8, tile_width * (sample_height / sample_width))
+
+    for start_idx in range(0, num_frames, frames_per_figure):
+        stop_idx = min(start_idx + frames_per_figure, num_frames)
+        page_frame_count = stop_idx - start_idx
+        n_rows = max(1, int(math.ceil(page_frame_count / n_cols)))
+        fig, axes = plt.subplots(
+            n_rows,
+            n_cols,
+            figsize=(n_cols * tile_width, n_rows * tile_height),
+            squeeze=False,
+        )
+        fig.subplots_adjust(left=0.02, right=0.98, top=0.98, bottom=0.02, wspace=0.04, hspace=0.08)
+
+        axes_flat = axes.ravel()
+        for page_offset, ax in enumerate(axes_flat):
+            frame_idx = start_idx + page_offset
+            if frame_idx >= stop_idx:
+                ax.axis("off")
+                continue
+
+            draw_tile(
+                ax,
+                frame_idx=frame_idx,
+                output=outputs_per_frame.get(frame_idx),
+                keyframe_batch=keyframe_batch,
+                max_frame_size=max_frame_size,
+                frame_paths=frame_paths,
+            )
+
+        plt.show()
     
 def save_binary(path, arr):
     if arr.dtype != np.bool_:
