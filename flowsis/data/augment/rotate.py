@@ -68,7 +68,6 @@ def rotation_augment(example: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
     m_union = mask_union(masks)
     
     angle, width_crop, height_crop, dx, dy = sample_rotation_angle(width, height, rng, **kwargs)
-    print('angle', angle)
     # Rotate masks and find crop size
     m_union_uint8 = m_union.astype(np.uint8, copy=False)
     m_union_img = Image.fromarray(m_union_uint8)
