@@ -30,7 +30,7 @@ def parse_args() -> argparse.Namespace:
         default="live",
         help="Use 'live' for the default webcam, a camera index such as '1', or a video file path.",
     )
-    parser.add_argument("--threshold", type=float, default=0.1)
+    parser.add_argument("--threshold", type=float, default=0.5)
     parser.add_argument("--image_size", type=int, default=640)
     return parser.parse_args()
 
