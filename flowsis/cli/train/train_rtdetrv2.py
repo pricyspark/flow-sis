@@ -1,4 +1,5 @@
 import torch
+import time
 import argparse
 from pathlib import Path
 from typing import Any, cast
@@ -51,14 +52,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output_dir", type=str, default="outputs/rtdetrv2")
     parser.add_argument("--model_name_or_path", type=str, default="PekingU/rtdetr_v2_r18vd")
     parser.add_argument("--epochs", type=int, default=5)
-    parser.add_argument("--batch_size", type=int, default=2)
+    parser.add_argument("--batch_size", type=int, default=8)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--weight_decay", type=float, default=1e-4)
     parser.add_argument("--warmup_steps", type=int, default=0)
     parser.add_argument("--image_size", type=int, default=640)
     parser.add_argument("--max_steps", type=int, default=None)
     parser.add_argument("--save_every_epochs", type=int, default=1)
-    parser.add_argument("--num_workers", type=int, default=0)
+    parser.add_argument("--num_workers", type=int, default=8)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--resume_from", type=str, default=None)
     parser.add_argument("--overfit_single_batch", action="store_true")
@@ -189,11 +190,14 @@ def build_dataloader(
     num_workers: int,
     shuffle: bool,
     seed: int,
+    device: torch.device,
 ) -> DataLoader:
     generator = torch.Generator()
     generator.manual_seed(seed)
 
     shuffle_batches = shuffle
+    pin_memory = device.type == "cuda"
+    persistent_workers = num_workers > 0
     return DataLoader(
         split_dataset,
         batch_size=batch_size,
@@ -201,6 +205,8 @@ def build_dataloader(
         num_workers=num_workers,
         collate_fn=collate_examples,
         generator=generator,
+        pin_memory=pin_memory,
+        persistent_workers=persistent_workers,
     )
 
 
@@ -378,6 +384,7 @@ def train_one_epoch(
     use_amp: bool,
     scaler: torch.cuda.amp.GradScaler | None,
 ) -> tuple[dict[str, Any], int]:
+    start = time.perf_counter()
     model.train()
     epoch_loss_sum = 0.0
     epoch_batch_count = 0
@@ -441,6 +448,7 @@ def train_one_epoch(
 
     epoch_loss = epoch_loss_sum / max(epoch_batch_count, 1)
     epoch_loss_dict = average_loss_dict(epoch_loss_dict_sums, epoch_batch_count)
+    end = time.perf_counter()
     summary = {
         "epoch": epoch,
         "global_step": global_step,
@@ -448,6 +456,7 @@ def train_one_epoch(
         "loss_dict": {key: round(value, 6) for key, value in epoch_loss_dict.items()},
         "first_loss": None if first_loss is None else round(first_loss, 6),
         "last_loss": None if last_loss is None else round(last_loss, 6),
+        "time": end - start
     }
     return summary, global_step
 
@@ -588,6 +597,7 @@ def main() -> None:
         num_workers=args.num_workers,
         shuffle=not args.overfit_single_batch,
         seed=args.seed,
+        device=device,
     )
     
     validation_loader = None
@@ -598,6 +608,7 @@ def main() -> None:
             num_workers=args.num_workers,
             shuffle=False,
             seed=args.seed,
+            device=device,
         )
 
     total_steps = estimate_total_steps(
