@@ -1,8 +1,62 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from typing import Literal
 
 from flowsis.utils import resolve_activation
+
+
+class ImageConditionedPromptPooler(nn.Module):
+    """Pool prompt vectors using inexpensive image-conditioned attention."""
+
+    def __init__(self, image_dim: int, text_dim: int, hidden_dim: int) -> None:
+        super().__init__()
+        self.image_proj = nn.Linear(image_dim, hidden_dim)
+        self.text_proj = nn.Linear(text_dim, hidden_dim)
+
+    @staticmethod
+    def _pool_image(image_features: torch.Tensor) -> torch.Tensor:
+        if image_features.ndim == 4:
+            return image_features.mean(dim=(-2, -1))
+        if image_features.ndim == 2:
+            return image_features
+        raise ValueError(
+            "Expected image features with shape [B,C,H,W] or [B,C], "
+            f"but received {tuple(image_features.shape)}."
+        )
+
+    def forward(
+        self,
+        image_features: torch.Tensor,
+        text_embeddings: torch.Tensor,
+        text_padding_mask: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        if text_embeddings.ndim == 2:
+            return text_embeddings, None
+        if text_embeddings.ndim != 3:
+            raise ValueError(
+                "Expected prompt embeddings with shape [B,P,D] or [B,D], "
+                f"but received {tuple(text_embeddings.shape)}."
+            )
+        if text_padding_mask is not None and text_padding_mask.shape != text_embeddings.shape[:2]:
+            raise ValueError("text_padding_mask must have shape [B,P].")
+
+        image_state = F.normalize(
+            self.image_proj(self._pool_image(image_features)), dim=-1
+        )
+        prompt_states = F.normalize(self.text_proj(text_embeddings), dim=-1)
+        scores = torch.einsum("bph,bh->bp", prompt_states, image_state)
+
+        if text_padding_mask is not None:
+            valid = ~text_padding_mask
+            scores = scores.masked_fill(~valid, torch.finfo(scores.dtype).min)
+            weights = torch.softmax(scores, dim=1) * valid.to(scores.dtype)
+            weights = weights / weights.sum(dim=1, keepdim=True).clamp_min(1e-6)
+        else:
+            weights = torch.softmax(scores, dim=1)
+
+        pooled = torch.einsum("bp,bpd->bd", weights, text_embeddings)
+        return pooled, weights
 
 
 class ChannelAggregator(nn.Module):
@@ -30,6 +84,11 @@ class ChannelAggregator(nn.Module):
 
         self.image_proj = nn.Linear(image_dim, hidden_dim)
         self.text_proj = nn.Linear(text_dim, hidden_dim)
+        self.prompt_pooler = ImageConditionedPromptPooler(
+            image_dim=image_dim,
+            text_dim=text_dim,
+            hidden_dim=hidden_dim,
+        )
         self.scorer = nn.Sequential(
             nn.Linear(hidden_dim * 2, hidden_dim),
             resolve_activation(activation),
@@ -47,33 +106,6 @@ class ChannelAggregator(nn.Module):
             f"but received {tuple(image_features.shape)}."
         )
 
-    def _pool_text_embeddings(
-        self,
-        text_embeddings: torch.Tensor,
-        text_padding_mask: torch.Tensor | None = None,
-    ) -> torch.Tensor:
-        if text_embeddings.ndim == 2:
-            return text_embeddings
-        if text_embeddings.ndim != 3:
-            raise ValueError(
-                "Expected text embeddings with shape [B, D] or [B, T, D], "
-                f"but received {tuple(text_embeddings.shape)}."
-            )
-
-        if text_padding_mask is None:
-            return text_embeddings.mean(dim=1)
-
-        if text_padding_mask.shape != text_embeddings.shape[:2]:
-            raise ValueError(
-                "text_padding_mask must match the first two text dimensions, "
-                f"but got mask {tuple(text_padding_mask.shape)} and embeddings "
-                f"{tuple(text_embeddings.shape)}."
-            )
-
-        valid_mask = (~text_padding_mask).unsqueeze(-1).to(text_embeddings.dtype)
-        valid_count = valid_mask.sum(dim=1).clamp_min(1.0)
-        return (text_embeddings * valid_mask).sum(dim=1) / valid_count
-
     def forward(
         self,
         image_features: torch.Tensor,
@@ -81,7 +113,11 @@ class ChannelAggregator(nn.Module):
         text_padding_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         pooled_image = self._pool_image_features(image_features)
-        pooled_text = self._pool_text_embeddings(text_embeddings, text_padding_mask)
+        pooled_text, _ = self.prompt_pooler(
+            image_features,
+            text_embeddings,
+            text_padding_mask,
+        )
 
         if pooled_image.shape[0] != pooled_text.shape[0]:
             raise ValueError(
@@ -107,5 +143,6 @@ PromptAggregator = ChannelAggregator
 
 __all__ = [
     "ChannelAggregator",
+    "ImageConditionedPromptPooler",
     "PromptAggregator",
 ]

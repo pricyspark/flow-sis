@@ -1,5 +1,7 @@
+import time
 import argparse
 from collections.abc import Iterable
+from functools import partial
 from pathlib import Path
 from typing import Any, Literal, cast
 
@@ -46,11 +48,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--train_stages",
         type=str,
-        default="online:5",
+        default="online:1",
         help="Comma-separated stage plan, e.g. 'offline:8,online:2'.",
     )
-    parser.add_argument("--batch_size", type=int, default=4)
-    parser.add_argument("--num_workers", type=int, default=0)
+    parser.add_argument("--batch_size", type=int, default=16)
+    parser.add_argument("--num_workers", type=int, default=8)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--weight_decay", type=float, default=1e-4)
     parser.add_argument("--warmup_steps", type=int, default=0)
@@ -59,6 +61,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--image_size", type=int, default=640)
     parser.add_argument("--amp", action="store_true")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--device",
+        type=str,
+        default=None,
+        help="Torch device to use, e.g. 'cuda:1' or 'cpu'. Defaults to automatic selection.",
+    )
     parser.add_argument(
         "--use_rotation_augment",
         action=argparse.BooleanOptionalAction,
@@ -98,33 +106,52 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--use_photometric_augment",
         action=argparse.BooleanOptionalAction,
-        default=False,
+        default=True,
         help=(
             "Apply photometric augmentation during online-image stages. "
             "Keep this disabled if you want online behavior to match an offline cache exactly."
         ),
     )
-    parser.add_argument("--num_decode_layers", type=int, default=2)
-    parser.add_argument("--decode_embed_dim", type=int, default=256)
+    parser.add_argument("--num_decode_layers", type=int, default=1)
+    parser.add_argument("--decode_embed_dim", type=int, default=128)
     parser.add_argument("--image_dim", type=int, default=256)
     parser.add_argument("--text_dim", type=int, default=768)
     parser.add_argument("--nhead", type=int, default=8)
-    parser.add_argument("--decode_ffn_dim", type=int, default=1024)
+    parser.add_argument("--decode_ffn_dim", type=int, default=512)
     parser.add_argument("--dropout", type=float, default=0.1)
     parser.add_argument("--activation", type=str, choices=("gelu", "relu"), default="gelu")
     parser.add_argument("--num_feature_levels", type=int, default=3)
     parser.add_argument("--decode_pos_encode", type=str, choices=("none", "first", "second", "all"), default="first")
-    parser.add_argument("--image_self_attention", type=str, choices=("GLOBAL", "WINDOW", "none"), default="GLOBAL")
+    parser.add_argument("--image_self_attention", type=str, choices=("GLOBAL", "WINDOW", "none"), default="WINDOW")
     parser.add_argument("--decode_window_size", type=int, default=8)
     parser.add_argument("--use_shifted_windows", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--multiscale_merge", type=str, choices=("conv", "deformable", "none"), default="conv")
+    parser.add_argument(
+        "--conv_merge_refinement",
+        choices=("standard", "depthwise"),
+        default="depthwise",
+    )
     parser.add_argument("--deformable_num_points", type=int, default=4)
     parser.add_argument("--deformable_offset_scale", type=float, default=2.0)
     parser.add_argument("--aggregator_dim", type=int, default=None)
-    parser.add_argument("--channel_aggregation", type=str, choices=("none", "sigmoid", "softmax"), default="sigmoid")
+    parser.add_argument("--channel_aggregation", type=str, choices=("none", "sigmoid", "softmax"), default="none")
     parser.add_argument("--mask_feature_source", type=str, choices=("merged", "highest_resolution"), default="merged")
     parser.add_argument("--mask_head_hidden_dim", type=int, default=None)
     parser.add_argument("--mask_output_dim", type=int, default=1)
+    parser.add_argument(
+        "--mask_convolution",
+        choices=("standard", "depthwise_separable"),
+        default="depthwise_separable",
+    )
+    parser.add_argument("--bce_loss_weight", type=float, default=1.0)
+    parser.add_argument("--dice_loss_weight", type=float, default=1.0)
+    parser.add_argument("--dice_smooth", type=float, default=1.0)
+    parser.add_argument(
+        "--prompt_dropout",
+        type=float,
+        default=0.2,
+        help="Probability of dropping each prompt vector during training; one is always kept.",
+    )
     return parser.parse_args()
 
 
@@ -211,12 +238,17 @@ def load_text_embedding(example: dict[str, Any]) -> torch.Tensor:
             f"Expected text embedding tensor at {example['text_embedding_path']}, "
             f"received {type(text_embedding).__name__}."
         )
-    if text_embedding.ndim == 3:
-        return text_embedding.mean(dim=0)
     if text_embedding.ndim == 2:
         return text_embedding
+    if text_embedding.ndim == 3:
+        raise ValueError(
+            "Legacy token-level prompt embeddings are not supported because averaging "
+            "them mixes unrelated token positions and includes padding. Regenerate "
+            "data/manifests/text-embeddings with the prompt embedding command so each "
+            "file has shape [num_prompts, text_dim]."
+        )
     raise ValueError(
-        f"Expected text embeddings to have shape [P,T,D] or [T,D], "
+        f"Expected pooled prompt embeddings to have shape [P,D], "
         f"but received {tuple(text_embedding.shape)}."
     )
 
@@ -357,9 +389,9 @@ def build_dataloader(
     generator.manual_seed(seed)
 
     if phase == "online":
-        collate_fn = lambda batch: collate_online_examples(batch, image_size=image_size)
+        collate_fn = partial(collate_online_examples, image_size=image_size)
     else:
-        collate_fn = lambda batch: collate_offline_examples(batch, image_size=image_size)
+        collate_fn = partial(collate_offline_examples, image_size=image_size)
     return DataLoader(
         split_dataset,
         batch_size=batch_size,
@@ -388,11 +420,17 @@ def build_head(args: argparse.Namespace, device: torch.device) -> BaseFusionHead
         multiscale_merge=cast(Literal["conv", "deformable", "none"], args.multiscale_merge),
         deformable_num_points=args.deformable_num_points,
         deformable_offset_scale=args.deformable_offset_scale,
+        conv_merge_refinement=cast(
+            Literal["standard", "depthwise"], args.conv_merge_refinement
+        ),
         aggregator_dim=args.aggregator_dim,
         channel_aggregation=cast(Literal["none", "sigmoid", "softmax"], args.channel_aggregation),
         mask_feature_source=cast(Literal["merged", "highest_resolution"], args.mask_feature_source),
         mask_head_hidden_dim=args.mask_head_hidden_dim,
         mask_output_dim=args.mask_output_dim,
+        mask_convolution=cast(
+            Literal["standard", "depthwise_separable"], args.mask_convolution
+        ),
     )
     return head.to(device)
 
@@ -421,6 +459,44 @@ def extract_online_feature_maps(
     return [feature_map.float() for feature_map in encoder_feature_maps]
 
 
+def compute_segmentation_objective(
+    mask_logits: torch.Tensor,
+    target_masks: torch.Tensor,
+    *,
+    bce_weight: float,
+    dice_weight: float,
+    dice_smooth: float,
+) -> dict[str, torch.Tensor]:
+    bce = F.binary_cross_entropy_with_logits(mask_logits, target_masks)
+    probabilities = mask_logits.sigmoid()
+    reduce_dims = tuple(range(1, probabilities.ndim))
+    intersection = (probabilities * target_masks).sum(dim=reduce_dims)
+    denominator = probabilities.sum(dim=reduce_dims) + target_masks.sum(dim=reduce_dims)
+    soft_dice = ((2.0 * intersection + dice_smooth) / (denominator + dice_smooth)).mean()
+    dice_loss = 1.0 - soft_dice
+    loss = bce_weight * bce + dice_weight * dice_loss
+
+    with torch.no_grad():
+        prediction = probabilities >= 0.5
+        target = target_masks >= 0.5
+        hard_intersection = (prediction & target).sum(dim=reduce_dims).float()
+        prediction_area = prediction.sum(dim=reduce_dims).float()
+        target_area = target.sum(dim=reduce_dims).float()
+        union = (prediction | target).sum(dim=reduce_dims).float()
+        hard_dice = ((2.0 * hard_intersection + 1.0) / (prediction_area + target_area + 1.0)).mean()
+        iou = ((hard_intersection + 1.0) / (union + 1.0)).mean()
+        brier = F.mse_loss(probabilities.float(), target_masks.float())
+
+    return {
+        "loss": loss,
+        "bce": bce.detach(),
+        "dice_loss": dice_loss.detach(),
+        "dice": hard_dice,
+        "iou": iou,
+        "brier": brier,
+    }
+
+
 def compute_batch_loss(
     head: BaseFusionHead,
     batch: dict[str, Any],
@@ -429,8 +505,25 @@ def compute_batch_loss(
     online_encoder: RTDetrV2 | None,
     image_size: int,
     use_amp: bool,
-) -> torch.Tensor:
+    bce_weight: float,
+    dice_weight: float,
+    dice_smooth: float,
+    prompt_dropout: float,
+) -> dict[str, torch.Tensor]:
     text_embeddings = batch["text_embeddings"].to(device)
+    text_padding_mask = None
+    if head.training and prompt_dropout > 0.0 and text_embeddings.ndim == 3:
+        text_padding_mask = torch.rand(
+            text_embeddings.shape[:2], device=device
+        ) < prompt_dropout
+        all_dropped = text_padding_mask.all(dim=1)
+        if all_dropped.any():
+            keep_indices = torch.randint(
+                text_embeddings.shape[1],
+                (int(all_dropped.sum().item()),),
+                device=device,
+            )
+            text_padding_mask[all_dropped, keep_indices] = False
     target_masks = batch["target_masks"].to(device)
     mask_output_size = target_masks.shape[-2:]
 
@@ -451,10 +544,18 @@ def compute_batch_loss(
         outputs = head(
             multi_image_features,
             text_embeddings,
+            text_padding_mask=text_padding_mask,
             mask_output_size=mask_output_size,
+            return_intermediates=False,
         )
         mask_logits = cast(torch.Tensor, outputs["mask_logits"])
-        return F.binary_cross_entropy_with_logits(mask_logits, target_masks)
+        return compute_segmentation_objective(
+            mask_logits,
+            target_masks,
+            bce_weight=bce_weight,
+            dice_weight=dice_weight,
+            dice_smooth=dice_smooth,
+        )
 
 
 def build_optimizer(model: BaseFusionHead, *, lr: float, weight_decay: float) -> AdamW:
@@ -551,7 +652,12 @@ def train_one_epoch(
     online_encoder: RTDetrV2 | None,
     use_amp: bool,
     scaler: torch.cuda.amp.GradScaler | None,
+    bce_weight: float,
+    dice_weight: float,
+    dice_smooth: float,
+    prompt_dropout: float,
 ) -> tuple[dict[str, Any], int]:
+    start = time.perf_counter()
     head.train()
     optimizer.zero_grad(set_to_none=True)
 
@@ -564,14 +670,19 @@ def train_one_epoch(
         if max_steps is not None and global_step >= max_steps:
             break
 
-        loss = compute_batch_loss(
+        batch_result = compute_batch_loss(
             head,
             batch,
             device=device,
             online_encoder=online_encoder,
             image_size=image_size,
             use_amp=use_amp,
+            bce_weight=bce_weight,
+            dice_weight=dice_weight,
+            dice_smooth=dice_smooth,
+            prompt_dropout=prompt_dropout,
         )
+        loss = batch_result["loss"]
 
         if scaler is not None:
             scaler.scale(loss).backward()
@@ -603,6 +714,7 @@ def train_one_epoch(
         )
 
     epoch_loss = total_loss / max(batch_count, 1)
+    end = time.perf_counter()
     return (
         {
             "epoch": epoch,
@@ -611,6 +723,7 @@ def train_one_epoch(
             "loss": round(epoch_loss, 6),
             "first_loss": None if first_loss is None else round(first_loss, 6),
             "last_loss": None if last_loss is None else round(last_loss, 6),
+            "time": end - start,
         },
         global_step,
     )
@@ -626,29 +739,46 @@ def evaluate(
     image_size: int,
     online_encoder: RTDetrV2 | None,
     use_amp: bool,
+    bce_weight: float,
+    dice_weight: float,
+    dice_smooth: float,
+    prompt_dropout: float,
 ) -> float:
     head.eval()
     total_loss = 0.0
     batch_count = 0
+    metric_totals = {name: 0.0 for name in ("bce", "dice_loss", "dice", "iou", "brier")}
 
     for batch in data_loader:
-        loss = compute_batch_loss(
+        batch_result = compute_batch_loss(
             head,
             batch,
             device=device,
             online_encoder=online_encoder,
             image_size=image_size,
             use_amp=use_amp,
+            bce_weight=bce_weight,
+            dice_weight=dice_weight,
+            dice_smooth=dice_smooth,
+            prompt_dropout=prompt_dropout,
         )
+        loss = batch_result["loss"]
         total_loss += float(loss.item())
+        for name in metric_totals:
+            metric_totals[name] += float(batch_result[name].item())
         batch_count += 1
 
     average_loss = total_loss / max(batch_count, 1)
+    metrics = {
+        name: round(total / max(batch_count, 1), 6)
+        for name, total in metric_totals.items()
+    }
     log_event(
         "validation_epoch",
         {
             "phase": phase,
             "loss": round(average_loss, 6),
+            **metrics,
         },
     )
     return average_loss
@@ -656,9 +786,18 @@ def evaluate(
 
 def main() -> None:
     args = parse_args()
+    if args.bce_loss_weight < 0 or args.dice_loss_weight < 0:
+        raise ValueError("Loss weights must be non-negative.")
+    if args.bce_loss_weight == 0 and args.dice_loss_weight == 0:
+        raise ValueError("At least one segmentation loss weight must be positive.")
+    if args.dice_smooth <= 0:
+        raise ValueError("dice_smooth must be positive.")
+    if not 0.0 <= args.prompt_dropout <= 1.0:
+        raise ValueError("prompt_dropout must be between zero and one.")
     set_seed(args.seed)
 
-    device = get_device()
+    device = torch.device(args.device) if args.device is not None else get_device()
+    log_event("device", {"device": str(device)})
     dataset = load_segmentation_dataset(args.dataset_path)
     ensure_split_exists(dataset, args.train_split, role="train")
     ensure_split_exists(dataset, args.validation_split, role="validation")
@@ -771,6 +910,10 @@ def main() -> None:
                 online_encoder=online_encoder if phase == "online" else None,
                 use_amp=args.amp,
                 scaler=scaler,
+                bce_weight=args.bce_loss_weight,
+                dice_weight=args.dice_loss_weight,
+                dice_smooth=args.dice_smooth,
+                prompt_dropout=args.prompt_dropout,
             )
             log_event("train_epoch", epoch_summary)
 
@@ -782,6 +925,10 @@ def main() -> None:
                 image_size=args.image_size,
                 online_encoder=online_encoder if phase == "online" else None,
                 use_amp=args.amp,
+                bce_weight=args.bce_loss_weight,
+                dice_weight=args.dice_loss_weight,
+                dice_smooth=args.dice_smooth,
+                prompt_dropout=0.0,
             )
 
             if (epoch_index + 1) % args.save_every_epochs == 0:

@@ -35,27 +35,35 @@ class ImageTextFusion(nn.Module):
         multiscale_merge: Literal["conv", "deformable", "none"] = "conv",
         deformable_num_points: int = 4,
         deformable_offset_scale: float = 2.0,
+        conv_merge_refinement: Literal["standard", "depthwise"] = "depthwise",
     ) -> None:
         super().__init__()
 
         self.num_feature_levels = int(num_feature_levels)
-        self.feature_dim = int(image_dim)
-        if int(embed_dim) != self.feature_dim:
-            raise ValueError(
-                "embed_dim must match image_dim in the current ImageTextFusion "
-                f"implementation, but received embed_dim={embed_dim} and "
-                f"image_dim={image_dim}."
-            )
+        self.input_dim = int(image_dim)
+        self.feature_dim = int(embed_dim)
+        self.input_projections = nn.ModuleList(
+            [
+                nn.Identity()
+                if self.input_dim == self.feature_dim
+                else nn.Conv2d(self.input_dim, self.feature_dim, kernel_size=1)
+                for _ in range(self.num_feature_levels)
+            ]
+        )
         if multiscale_merge not in {"conv", "deformable", "none"}:
             raise ValueError(
                 "multiscale_merge must be one of {'conv', 'deformable', 'none'}, "
                 f"but received {multiscale_merge!r}."
             )
+        if conv_merge_refinement not in {"standard", "depthwise"}:
+            raise ValueError(
+                "conv_merge_refinement must be 'standard' or 'depthwise'."
+            )
 
         self.blocks = nn.ModuleList(
             [
                 ImageTextFusionBlock(
-                    image_dim=image_dim,
+                    image_dim=self.feature_dim,
                     text_dim=text_dim,
                     nhead=nhead,
                     ffn_dim=ffn_dim,
@@ -76,6 +84,17 @@ class ImageTextFusion(nn.Module):
         self.level_embedding = nn.Embedding(self.num_feature_levels, self.feature_dim)
         self.level_fuse = None
         if self.multiscale_merge == "conv":
+            refinement = (
+                nn.Conv2d(self.feature_dim, self.feature_dim, kernel_size=3, padding=1)
+                if conv_merge_refinement == "standard"
+                else nn.Conv2d(
+                    self.feature_dim,
+                    self.feature_dim,
+                    kernel_size=3,
+                    padding=1,
+                    groups=self.feature_dim,
+                )
+            )
             self.level_fuse = nn.Sequential(
                 nn.Conv2d(
                     self.feature_dim * self.num_feature_levels,
@@ -83,13 +102,13 @@ class ImageTextFusion(nn.Module):
                     kernel_size=1,
                 ),
                 resolve_activation(activation),
-                nn.Conv2d(self.feature_dim, self.feature_dim, kernel_size=3, padding=1),
+                refinement,
                 resolve_activation(activation),
             )
         self.deformable_fuse = None
         if self.multiscale_merge == "deformable":
             self.deformable_fuse = TextGuidedDeformableFusion(
-                image_dim=image_dim,
+                image_dim=self.feature_dim,
                 text_dim=text_dim,
                 num_feature_levels=self.num_feature_levels,
                 num_points=deformable_num_points,
@@ -116,7 +135,12 @@ class ImageTextFusion(nn.Module):
             )
 
         level_bias = self.level_embedding.weight[level_index].view(1, -1, 1, 1)
-        fused_features = image_features + level_bias
+        if image_features.shape[1] != self.input_dim:
+            raise ValueError(
+                f"Expected {self.input_dim} input channels, but received "
+                f"{image_features.shape[1]} at feature level {level_index}."
+            )
+        fused_features = self.input_projections[level_index](image_features) + level_bias
         for block_index, block in enumerate(self.blocks):
             add_positional_encoding = (
                 block_index == self.pos_encode_blocks 

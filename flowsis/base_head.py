@@ -39,11 +39,13 @@ class BaseFusionHead(nn.Module):
         deformable_offset_scale: float,
         aggregator_dim: int | None = None,
         *,
+        conv_merge_refinement: Literal["standard", "depthwise"] = "depthwise",
         channel_aggregation: Literal["none", "sigmoid", "softmax"] = "sigmoid",
         mask_feature_source: Literal["merged", "highest_resolution"] = "merged",
         mask_head_hidden_dim: int | None = None,
         mask_output_dim: int = 1,
         mask_upsample_scales: tuple[int, ...] = (2, 2),
+        mask_convolution: Literal["standard", "depthwise_separable"] = "depthwise_separable",
     ) -> None:
         super().__init__()
 
@@ -85,25 +87,27 @@ class BaseFusionHead(nn.Module):
             multiscale_merge=multiscale_merge,
             deformable_num_points=deformable_num_points,
             deformable_offset_scale=deformable_offset_scale,
+            conv_merge_refinement=conv_merge_refinement,
         )
         self.channel_aggregator = None
         if self.channel_aggregation != "none":
             self.channel_aggregator = ChannelAggregator(
-                image_dim=image_dim,
+                image_dim=decode_embed_dim,
                 text_dim=text_dim,
                 hidden_dim=aggregator_dim,
-                output_dim=image_dim,
+                output_dim=decode_embed_dim,
                 dropout=dropout,
                 activation=activation,
             )
         self.mask_head = MaskHead(
-            image_dim=image_dim,
+            image_dim=decode_embed_dim,
             text_dim=text_dim,
             hidden_dim=mask_head_hidden_dim if mask_head_hidden_dim is not None else aggregator_dim,
             output_dim=mask_output_dim,
             upsample_scales=mask_upsample_scales,
             dropout=dropout,
             activation=activation,
+            convolution=mask_convolution,
         )
 
     def _select_mask_features(
@@ -134,9 +138,12 @@ class BaseFusionHead(nn.Module):
             text_padding_mask=text_padding_mask,
         )
         if self.channel_aggregation == "sigmoid":
-            channel_modulation = ChannelAggregator.compute_gates(channel_logits)
+            # A zero logit is the identity rather than suppressing every channel
+            # by one half at initialization.
+            channel_modulation = 2.0 * ChannelAggregator.compute_gates(channel_logits)
         else:
             channel_modulation = ChannelAggregator.compute_weights(channel_logits, dim=-1)
+            channel_modulation = channel_modulation * channel_modulation.shape[-1]
 
         modulated_features = image_features * channel_modulation.unsqueeze(-1).unsqueeze(-1)
         return modulated_features, channel_logits, channel_modulation
@@ -148,6 +155,7 @@ class BaseFusionHead(nn.Module):
         text_padding_mask: torch.Tensor | None = None,
         *,
         mask_output_size: tuple[int, int] | None = None,
+        return_intermediates: bool = True,
     ) -> dict[str, torch.Tensor | list[torch.Tensor] | None]:
         fused_feature_list, merged_features = self.decoder(
             multi_image_features,
@@ -172,12 +180,17 @@ class BaseFusionHead(nn.Module):
         if self.mask_output_dim == 1:
             mask_logits = mask_logits.squeeze(1)
 
-        return {
+        outputs: dict[str, torch.Tensor | list[torch.Tensor] | None] = {
+            "mask_logits": mask_logits,
+        }
+        if not return_intermediates:
+            return outputs
+        outputs.update({
             "fused_feature_list": fused_feature_list,
             "merged_features": merged_features,
             "mask_features": mask_features,
             "modulated_features": modulated_features,
             "channel_logits": channel_logits,
             "channel_modulation": channel_modulation,
-            "mask_logits": mask_logits,
-        }
+        })
+        return outputs

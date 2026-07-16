@@ -5,8 +5,30 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from flowsis.decoder.shape import pool_text_embeddings
+from flowsis.prompt_aggregator import ImageConditionedPromptPooler
 from flowsis.utils import resolve_activation
+
+
+def _make_conv(
+    in_channels: int,
+    out_channels: int,
+    *,
+    convolution: Literal["standard", "depthwise_separable"],
+) -> nn.Module:
+    if convolution == "standard":
+        return nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1)
+    if convolution == "depthwise_separable":
+        return nn.Sequential(
+            nn.Conv2d(
+                in_channels,
+                in_channels,
+                kernel_size=3,
+                padding=1,
+                groups=in_channels,
+            ),
+            nn.Conv2d(in_channels, out_channels, kernel_size=1),
+        )
+    raise ValueError(f"Unsupported convolution type {convolution!r}.")
 
 
 class _UpsampleBlock(nn.Module):
@@ -17,13 +39,14 @@ class _UpsampleBlock(nn.Module):
         *,
         dropout: float,
         activation: Literal["gelu", "relu"],
+        convolution: Literal["standard", "depthwise_separable"],
     ) -> None:
         super().__init__()
         self.block = nn.Sequential(
-            nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
+            _make_conv(in_channels, out_channels, convolution=convolution),
             resolve_activation(activation),
             nn.Dropout2d(dropout),
-            nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1),
+            _make_conv(out_channels, out_channels, convolution=convolution),
             resolve_activation(activation),
         )
 
@@ -56,6 +79,7 @@ class MaskHead(nn.Module):
         upsample_scales: Iterable[int] = (2, 2),
         dropout: float = 0.1,
         activation: Literal["gelu", "relu"] = "gelu",
+        convolution: Literal["standard", "depthwise_separable"] = "depthwise_separable",
     ) -> None:
         super().__init__()
         if output_dim <= 0:
@@ -76,6 +100,13 @@ class MaskHead(nn.Module):
             resolve_activation(activation),
         )
         self.text_affine = nn.Linear(text_dim, self.hidden_dim * 2)
+        nn.init.zeros_(self.text_affine.weight)
+        nn.init.zeros_(self.text_affine.bias)
+        self.prompt_pooler = ImageConditionedPromptPooler(
+            image_dim=self.hidden_dim,
+            text_dim=text_dim,
+            hidden_dim=self.hidden_dim,
+        )
 
         stage_dims = [self.hidden_dim]
         for _ in self.upsample_scales:
@@ -89,6 +120,7 @@ class MaskHead(nn.Module):
                     stage_dims[index + 1],
                     dropout=dropout,
                     activation=activation,
+                    convolution=convolution,
                 )
                 for index in range(len(self.upsample_scales))
             ]
@@ -101,7 +133,11 @@ class MaskHead(nn.Module):
         text_embeddings: torch.Tensor,
         text_padding_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        pooled_text = pool_text_embeddings(text_embeddings, text_padding_mask)
+        pooled_text, _ = self.prompt_pooler(
+            features,
+            text_embeddings,
+            text_padding_mask,
+        )
         if pooled_text.shape[0] != features.shape[0]:
             raise ValueError(
                 "Text and image batches must match, "
@@ -109,6 +145,7 @@ class MaskHead(nn.Module):
             )
 
         gamma, beta = self.text_affine(pooled_text).chunk(2, dim=-1)
+        gamma = torch.tanh(gamma)
         gamma = gamma.unsqueeze(-1).unsqueeze(-1) # (B,_,1,1)
         beta = beta.unsqueeze(-1).unsqueeze(-1)
         return features * (1.0 + gamma) + beta

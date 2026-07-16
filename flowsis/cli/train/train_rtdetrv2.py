@@ -59,8 +59,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--image_size", type=int, default=640)
     parser.add_argument("--max_steps", type=int, default=None)
     parser.add_argument("--save_every_epochs", type=int, default=1)
-    parser.add_argument("--num_workers", type=int, default=8)
+    parser.add_argument("--num_workers", type=int, default=12)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--device",
+        type=str,
+        default=None,
+        help="Torch device to use, e.g. 'cuda:1' or 'cpu'. Defaults to automatic selection.",
+    )
     parser.add_argument("--resume_from", type=str, default=None)
     parser.add_argument("--overfit_single_batch", action="store_true")
     parser.add_argument("--amp", action="store_true")
@@ -102,13 +108,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--overlap_p",
         type=float,
-        default=0.5,
+        default=0.1,
         help="Geometric continuation parameter used to sample additional overlap layers.",
     )
     parser.add_argument(
         "--use_photometric_augment",
         action=argparse.BooleanOptionalAction,
-        default=False,
+        default=True,
         help="Apply photometric augmentation during training.",
     )
     return parser.parse_args()
@@ -533,7 +539,8 @@ def main() -> None:
     args = parse_args()
     set_seed(args.seed)
 
-    device = get_device()
+    device = torch.device(args.device) if args.device is not None else get_device()
+    log_event("device", {"device": str(device)})
     dataset = load_detection_dataset(args)
 
     if args.sanity_decode:
@@ -738,3 +745,8 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+'''
+flowsis-train-rtdetrv2 --model_name_or_path outputs/rtdetrv2_good/checkpoint-double --lr 1e-5 --use_overlap_augment --epochs 100 > train_double.txt
+flowsis-train-rtdetrv2 --device cuda:1 --epochs 100
+'''

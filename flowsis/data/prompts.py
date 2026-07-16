@@ -16,7 +16,14 @@ class LabelPrompts:
     def __init__(self) -> None:
         self.prompts: dict[str, list[str]] = {}
         self.embeddings: dict[str, torch.Tensor] = {}
-        self.siglip2 = SigLIP2.from_pretrained(device=get_device())
+        # Preserve one semantic vector per prompt.  Token-level tensors are both
+        # unnecessarily expensive for the fusion head and require carrying the
+        # tokenizer padding mask through the embedding cache.
+        self.siglip2 = SigLIP2.from_pretrained(
+            return_mode="pooled",
+            normalize=True,
+            device=get_device(),
+        )
 
     def add(self, label: str, prompt: str) -> None:
         if label in self.prompts:
