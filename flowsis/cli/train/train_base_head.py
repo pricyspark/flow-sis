@@ -1,5 +1,6 @@
 import time
 import argparse
+import json
 from collections.abc import Iterable
 from functools import partial
 from pathlib import Path
@@ -19,6 +20,7 @@ from flowsis.data.augment import center_square_augment, overlap_augment, photome
 from flowsis.data.images import get_image
 from flowsis.data.masks import load_binary
 from flowsis.pretrained import RTDetrV2
+from flowsis.cli.train.training_manifest import write_run_manifest
 from flowsis.utils import (
     build_autocast_context,
     build_grad_scaler,
@@ -51,7 +53,7 @@ def parse_args() -> argparse.Namespace:
         default="online:1",
         help="Comma-separated stage plan, e.g. 'offline:8,online:2'.",
     )
-    parser.add_argument("--batch_size", type=int, default=16)
+    parser.add_argument("--batch_size", type=int, default=8)
     parser.add_argument("--num_workers", type=int, default=8)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--weight_decay", type=float, default=1e-4)
@@ -190,34 +192,12 @@ def ensure_split_exists(dataset: DatasetDict, split_name: str, *, role: str) -> 
         raise KeyError(f"Missing {role} split '{split_name}' in dataset.")
 
 
-def load_target_mask(example: dict[str, Any]) -> torch.Tensor:
-    mask = load_binary(example["target_mask_path"]).astype("float32", copy=False)
-    return torch.from_numpy(mask)
-
-
 def load_segmentation_objects(example: dict[str, Any], **_: Any) -> dict[str, Any]:
-    if "objects" not in example:
-        return example
     for obj in example["objects"]:
         if "mask" in obj:
             continue
-        if int(obj["video_id"]) != int(example["video_id"]) or int(obj["frame_idx"]) != int(example["frame_idx"]):
-            continue
-        obj["mask"] = load_binary(example["target_mask_path"])
+        obj["mask"] = load_binary(obj["mask_path"])
     return example
-
-
-def load_target_mask_from_objects(example: dict[str, Any]) -> torch.Tensor:
-    target_video_id = int(example["video_id"])
-    target_frame_idx = int(example["frame_idx"])
-    for obj in example.get("objects", []):
-        if int(obj["video_id"]) != target_video_id or int(obj["frame_idx"]) != target_frame_idx:
-            continue
-        if "mask" not in obj:
-            continue
-        mask = obj["mask"]
-        return torch.from_numpy(mask.astype("float32", copy=False))
-    return load_target_mask(example)
 
 
 def resize_mask_tensor(mask: torch.Tensor, *, image_size: int) -> torch.Tensor:
@@ -231,11 +211,23 @@ def resize_mask_tensor(mask: torch.Tensor, *, image_size: int) -> torch.Tensor:
     return resized.squeeze(0).squeeze(0)
 
 
-def load_text_embedding(example: dict[str, Any]) -> torch.Tensor:
-    text_embedding = torch.load(example["text_embedding_path"], map_location="cpu", weights_only=False)
+def normalize_object_box(obj: dict[str, Any], example: dict[str, Any]) -> list[float]:
+    x, y, width, height = (float(value) for value in obj["bbox"])
+    image_width = max(float(example["width"]), 1.0)
+    image_height = max(float(example["height"]), 1.0)
+    return [
+        x / image_width,
+        y / image_height,
+        (x + width) / image_width,
+        (y + height) / image_height,
+    ]
+
+
+def load_text_embedding(obj: dict[str, Any]) -> torch.Tensor:
+    text_embedding = torch.load(obj["text_embedding_path"], map_location="cpu", weights_only=False)
     if not isinstance(text_embedding, torch.Tensor):
         raise TypeError(
-            f"Expected text embedding tensor at {example['text_embedding_path']}, "
+            f"Expected text embedding tensor at {obj['text_embedding_path']}, "
             f"received {type(text_embedding).__name__}."
         )
     if text_embedding.ndim == 2:
@@ -340,14 +332,36 @@ def build_validation_dataset(split_dataset: Dataset, args: argparse.Namespace) -
 
 def collate_online_examples(batch: list[dict[str, Any]], *, image_size: int) -> dict[str, Any]:
     images = [get_image(example, convert_mode="RGB") for example in batch]
+    object_records = [
+        (image_index, example, obj)
+        for image_index, example in enumerate(batch)
+        for obj in example["objects"]
+        if "mask" in obj
+    ]
+    if not object_records:
+        raise ValueError("An online segmentation batch must contain at least one valid object.")
     return {
         "images": images,
-        "text_embeddings": torch.stack([load_text_embedding(example) for example in batch], dim=0),
+        "object_image_indices": torch.tensor(
+            [image_index for image_index, _, _ in object_records], dtype=torch.long
+        ),
+        "text_embeddings": torch.stack(
+            [load_text_embedding(obj) for _, _, obj in object_records], dim=0
+        ),
         "target_masks": torch.stack(
-            [resize_mask_tensor(load_target_mask_from_objects(example), image_size=image_size) for example in batch],
+            [
+                resize_mask_tensor(
+                    torch.from_numpy(obj["mask"].astype("float32", copy=False)),
+                    image_size=image_size,
+                )
+                for _, _, obj in object_records
+            ],
             dim=0,
         ),
-        "mask_output_sizes": [(image_size, image_size) for _ in images],
+        "object_boxes": torch.tensor(
+            [normalize_object_box(obj, example) for _, example, obj in object_records],
+            dtype=torch.float32,
+        ),
         "cache_keys": [str(example["cache_key"]) for example in batch],
     }
 
@@ -363,14 +377,35 @@ def collate_offline_examples(batch: list[dict[str, Any]], *, image_size: int) ->
         for level_index in range(num_levels)
     ]
 
+    object_records = [
+        (image_index, example, obj)
+        for image_index, example in enumerate(batch)
+        for obj in example["objects"]
+    ]
+    if not object_records:
+        raise ValueError("An offline segmentation batch must contain at least one object.")
     return {
         "multi_image_features": stacked_feature_levels,
-        "text_embeddings": torch.stack([load_text_embedding(example) for example in batch], dim=0),
+        "object_image_indices": torch.tensor(
+            [image_index for image_index, _, _ in object_records], dtype=torch.long
+        ),
+        "text_embeddings": torch.stack(
+            [load_text_embedding(obj) for _, _, obj in object_records], dim=0
+        ),
         "target_masks": torch.stack(
-            [resize_mask_tensor(load_target_mask(example), image_size=image_size) for example in batch],
+            [
+                resize_mask_tensor(
+                    torch.from_numpy(load_binary(obj["mask_path"]).astype("float32", copy=False)),
+                    image_size=image_size,
+                )
+                for _, _, obj in object_records
+            ],
             dim=0,
         ),
-        "mask_output_sizes": [(image_size, image_size) for _ in batch],
+        "object_boxes": torch.tensor(
+            [normalize_object_box(obj, example) for _, example, obj in object_records],
+            dtype=torch.float32,
+        ),
         "cache_keys": [str(example["cache_key"]) for example in batch],
     }
 
@@ -403,35 +438,33 @@ def build_dataloader(
 
 
 def build_head(args: argparse.Namespace, device: torch.device) -> BaseFusionHead:
-    head = BaseFusionHead(
-        num_decode_layers=args.num_decode_layers,
-        decode_embed_dim=args.decode_embed_dim,
-        image_dim=args.image_dim,
-        text_dim=args.text_dim,
-        nhead=args.nhead,
-        decode_ffn_dim=args.decode_ffn_dim,
-        dropout=args.dropout,
-        activation=cast(Literal["gelu", "relu"], args.activation),
-        num_feature_levels=args.num_feature_levels,
-        decode_pos_encode=cast(Literal["none", "first", "second", "all"], args.decode_pos_encode),
-        image_self_attention=cast(Literal["GLOBAL", "WINDOW", "none"], args.image_self_attention),
-        decode_window_size=args.decode_window_size,
-        use_shifted_windows=args.use_shifted_windows,
-        multiscale_merge=cast(Literal["conv", "deformable", "none"], args.multiscale_merge),
-        deformable_num_points=args.deformable_num_points,
-        deformable_offset_scale=args.deformable_offset_scale,
-        conv_merge_refinement=cast(
-            Literal["standard", "depthwise"], args.conv_merge_refinement
-        ),
-        aggregator_dim=args.aggregator_dim,
-        channel_aggregation=cast(Literal["none", "sigmoid", "softmax"], args.channel_aggregation),
-        mask_feature_source=cast(Literal["merged", "highest_resolution"], args.mask_feature_source),
-        mask_head_hidden_dim=args.mask_head_hidden_dim,
-        mask_output_dim=args.mask_output_dim,
-        mask_convolution=cast(
-            Literal["standard", "depthwise_separable"], args.mask_convolution
-        ),
-    )
+    config = {
+        "num_decode_layers": args.num_decode_layers,
+        "decode_embed_dim": args.decode_embed_dim,
+        "image_dim": args.image_dim,
+        "text_dim": args.text_dim,
+        "nhead": args.nhead,
+        "decode_ffn_dim": args.decode_ffn_dim,
+        "dropout": args.dropout,
+        "activation": args.activation,
+        "num_feature_levels": args.num_feature_levels,
+        "decode_pos_encode": args.decode_pos_encode,
+        "image_self_attention": args.image_self_attention,
+        "decode_window_size": args.decode_window_size,
+        "use_shifted_windows": args.use_shifted_windows,
+        "multiscale_merge": args.multiscale_merge,
+        "deformable_num_points": args.deformable_num_points,
+        "deformable_offset_scale": args.deformable_offset_scale,
+        "conv_merge_refinement": args.conv_merge_refinement,
+        "aggregator_dim": args.aggregator_dim,
+        "channel_aggregation": args.channel_aggregation,
+        "mask_feature_source": args.mask_feature_source,
+        "mask_head_hidden_dim": args.mask_head_hidden_dim,
+        "mask_output_dim": args.mask_output_dim,
+        "mask_convolution": args.mask_convolution,
+    }
+    head = BaseFusionHead(**config)
+    head.architecture_config = config
     return head.to(device)
 
 
@@ -462,17 +495,33 @@ def extract_online_feature_maps(
 def compute_segmentation_objective(
     mask_logits: torch.Tensor,
     target_masks: torch.Tensor,
+    object_image_indices: torch.Tensor | None = None,
     *,
     bce_weight: float,
     dice_weight: float,
     dice_smooth: float,
 ) -> dict[str, torch.Tensor]:
-    bce = F.binary_cross_entropy_with_logits(mask_logits, target_masks)
+    def reduce_objects(values: torch.Tensor) -> torch.Tensor:
+        if object_image_indices is None:
+            return values.mean()
+        num_images = int(object_image_indices.max().item()) + 1
+        totals = torch.zeros(num_images, device=values.device, dtype=values.dtype)
+        counts = torch.zeros(num_images, device=values.device, dtype=values.dtype)
+        totals.scatter_add_(0, object_image_indices, values)
+        counts.scatter_add_(0, object_image_indices, torch.ones_like(values))
+        return (totals / counts.clamp_min(1.0))[counts > 0].mean()
+
+    reduce_dims = tuple(range(1, mask_logits.ndim))
+    bce_per_object = F.binary_cross_entropy_with_logits(
+        mask_logits, target_masks, reduction="none"
+    ).mean(dim=reduce_dims)
+    bce = reduce_objects(bce_per_object)
     probabilities = mask_logits.sigmoid()
-    reduce_dims = tuple(range(1, probabilities.ndim))
     intersection = (probabilities * target_masks).sum(dim=reduce_dims)
     denominator = probabilities.sum(dim=reduce_dims) + target_masks.sum(dim=reduce_dims)
-    soft_dice = ((2.0 * intersection + dice_smooth) / (denominator + dice_smooth)).mean()
+    soft_dice = reduce_objects(
+        (2.0 * intersection + dice_smooth) / (denominator + dice_smooth)
+    )
     dice_loss = 1.0 - soft_dice
     loss = bce_weight * bce + dice_weight * dice_loss
 
@@ -483,9 +532,15 @@ def compute_segmentation_objective(
         prediction_area = prediction.sum(dim=reduce_dims).float()
         target_area = target.sum(dim=reduce_dims).float()
         union = (prediction | target).sum(dim=reduce_dims).float()
-        hard_dice = ((2.0 * hard_intersection + 1.0) / (prediction_area + target_area + 1.0)).mean()
-        iou = ((hard_intersection + 1.0) / (union + 1.0)).mean()
-        brier = F.mse_loss(probabilities.float(), target_masks.float())
+        hard_dice = reduce_objects(
+            (2.0 * hard_intersection + 1.0) / (prediction_area + target_area + 1.0)
+        )
+        iou = reduce_objects((hard_intersection + 1.0) / (union + 1.0))
+        brier = reduce_objects(
+            F.mse_loss(probabilities.float(), target_masks.float(), reduction="none").mean(
+                dim=reduce_dims
+            )
+        )
 
     return {
         "loss": loss,
@@ -526,6 +581,9 @@ def compute_batch_loss(
             text_padding_mask[all_dropped, keep_indices] = False
     target_masks = batch["target_masks"].to(device)
     mask_output_size = target_masks.shape[-2:]
+    object_image_indices = batch["object_image_indices"].to(device)
+    object_boxes = batch["object_boxes"].to(device)
+    object_boxes.clamp_(0.0, 1.0)
 
     if "multi_image_features" in batch:
         multi_image_features = [feature_level.to(device) for feature_level in batch["multi_image_features"]]
@@ -540,11 +598,17 @@ def compute_batch_loss(
             )
             multi_image_features = [feature_level.to(device) for feature_level in multi_image_features]
 
+    multi_image_features = [
+        feature_level.index_select(0, object_image_indices)
+        for feature_level in multi_image_features
+    ]
+
     with build_autocast_context(enabled=use_amp, device=device):
         outputs = head(
             multi_image_features,
             text_embeddings,
             text_padding_mask=text_padding_mask,
+            object_boxes=object_boxes,
             mask_output_size=mask_output_size,
             return_intermediates=False,
         )
@@ -552,6 +616,7 @@ def compute_batch_loss(
         return compute_segmentation_objective(
             mask_logits,
             target_masks,
+            object_image_indices,
             bce_weight=bce_weight,
             dice_weight=dice_weight,
             dice_smooth=dice_smooth,
@@ -575,6 +640,11 @@ def save_head_checkpoint(
     checkpoint_dir = output_dir / f"checkpoint-{global_step:06d}"
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
     torch.save(head.state_dict(), checkpoint_dir / "model.pt")
+    architecture_config = getattr(head, "architecture_config", None)
+    if architecture_config is not None:
+        (checkpoint_dir / "head_config.json").write_text(
+            json.dumps(architecture_config, indent=2, sort_keys=True)
+        )
     torch.save(
         {
             "epoch": epoch,
@@ -854,6 +924,18 @@ def main() -> None:
         )
 
     head = build_head(args, device)
+    run_config_path = write_run_manifest(
+        output_dir,
+        args,
+        model_config=cast(dict[str, Any], head.architecture_config),
+        resolved={
+            "device": str(device),
+            "train_stages": [
+                {"phase": phase, "epochs": epochs} for phase, epochs in stages
+            ],
+        },
+    )
+    log_event("saved_run_config", {"path": str(run_config_path)})
     optimizer = build_optimizer(head, lr=args.lr, weight_decay=args.weight_decay)
     total_steps = estimate_total_steps(stages, train_loaders, max_steps=args.max_steps)
     scheduler = build_scheduler(optimizer, warmup_steps=args.warmup_steps, total_steps=total_steps)
@@ -961,6 +1043,11 @@ def main() -> None:
     final_dir = output_dir / "final"
     final_dir.mkdir(parents=True, exist_ok=True)
     torch.save(head.state_dict(), final_dir / "model.pt")
+    architecture_config = getattr(head, "architecture_config", None)
+    if architecture_config is not None:
+        (final_dir / "head_config.json").write_text(
+            json.dumps(architecture_config, indent=2, sort_keys=True)
+        )
     log_event("saved_final_model", {"path": str(final_dir / 'model.pt')})
 
 

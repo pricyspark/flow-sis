@@ -39,6 +39,7 @@ from flowsis.data.augment import (
     roi_square_augment,
     rotation_augment,
 )
+from flowsis.cli.train.training_manifest import write_run_manifest
 
 AugmentationStep = tuple[str, Any, dict[str, Any]]
 
@@ -566,6 +567,18 @@ def main() -> None:
         id2label=id2label,
         device=device,
     )
+    run_config_path = write_run_manifest(
+        output_dir,
+        args,
+        model_config=model.model.config.to_dict(),
+        resolved={
+            "device": str(device),
+            "num_labels": num_labels,
+            "id2label": id2label,
+            "resume_checkpoint": None if resume_checkpoint is None else str(resume_checkpoint),
+        },
+    )
+    log_event("saved_run_config", {"path": str(run_config_path)})
 
     loader = build_detection_loader()
     train_augmentation_steps = build_train_augmentation_steps(args)

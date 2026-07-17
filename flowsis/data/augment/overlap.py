@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import random
 from typing import Any, Literal, cast
 
@@ -96,6 +97,7 @@ def _verify_overlap_example(
         kept_objects.append(obj)
         
     if not kept_objects:
+        example["objects"] = []
         return False
         
     example["objects"] = kept_objects
@@ -118,6 +120,8 @@ def overlap_augment(
         
     img: Image.Image = example["image"]
     objects = example["objects"]
+    original_image = img.copy()
+    original_objects = copy.deepcopy(objects)
     height = example["height"]
     width = example["width"]
     
@@ -198,7 +202,7 @@ def overlap_augment(
     num_connected_components = kwargs.get("num_connected_components", 3)
     connectivity = kwargs.get("connectivity", 8)
         
-    _verify_overlap_example(
+    is_valid = _verify_overlap_example(
         example,
         hard_threshold=hard_threshold,
         soft_threshold=soft_threshold,
@@ -207,5 +211,8 @@ def overlap_augment(
         masks=np.asarray(all_masks, dtype=np.bool_),
         visible_masks=np.asarray(all_visible_masks, dtype=np.bool_),
     )
+    if not is_valid:
+        example["image"] = original_image
+        example["objects"] = original_objects
     
     return example

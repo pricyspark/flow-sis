@@ -14,6 +14,9 @@ from .association import (
 from .types import Box, SelectionResult
 
 
+DetectionLog = Sequence[Mapping[str, Any]]
+
+
 @dataclass(frozen=True)
 class _TrackletStats:
     index: int
@@ -32,15 +35,24 @@ class _TrackletStats:
 
 
 def _to_boxes(detections: Mapping[str, Any]) -> list[Box]:
-    return [tuple(float(value) for value in box) for box in detections["boxes"].detach().cpu().tolist()]
+    boxes = detections["boxes"]
+    if isinstance(boxes, torch.Tensor):
+        boxes = boxes.detach().cpu().tolist()
+    return [tuple(float(value) for value in box) for box in boxes]
 
 
 def _to_scores(detections: Mapping[str, Any]) -> list[float]:
-    return [float(score) for score in detections["scores"].detach().cpu().tolist()]
+    scores = detections["scores"]
+    if isinstance(scores, torch.Tensor):
+        scores = scores.detach().cpu().tolist()
+    return [float(score) for score in scores]
 
 
 def _to_labels(detections: Mapping[str, Any]) -> list[int]:
-    return [int(label) for label in detections["labels"].detach().cpu().tolist()]
+    labels = detections["labels"]
+    if isinstance(labels, torch.Tensor):
+        labels = labels.detach().cpu().tolist()
+    return [int(label) for label in labels]
 
 
 def _confidence_stability(scores: Sequence[float]) -> float:
@@ -85,12 +97,13 @@ def _match_candidate(
 
 
 def _build_tracklet_stats(
-    detections_log: Sequence[Mapping[str, Any]],
+    detections_log: DetectionLog,
     current_index: int,
     *,
     min_association_score: float = 0.1,
 ) -> _TrackletStats:
-    current_detections = detections_log[-1]
+    reverse_log = reversed(detections_log)
+    current_detections = next(reverse_log)
     current_boxes = _to_boxes(current_detections)
     current_scores = _to_scores(current_detections)
     current_labels = _to_labels(current_detections)
@@ -108,7 +121,7 @@ def _build_tracklet_stats(
     reference_box = current_box
     reference_label = current_label
 
-    for historical_detections in reversed(detections_log[:-1]):
+    for historical_detections in reverse_log:
         historical_boxes = _to_boxes(historical_detections)
         historical_scores = _to_scores(historical_detections)
         historical_labels = _to_labels(historical_detections)
@@ -210,7 +223,7 @@ def _empty_selection_error() -> ValueError:
     return ValueError("Expected detections_log to contain at least one frame with one detection.")
 
 
-def select_first_detection(detections_log: Sequence[Mapping[str, Any]]) -> SelectionResult:
+def select_first_detection(detections_log: DetectionLog) -> SelectionResult:
     if not detections_log:
         raise _empty_selection_error()
 
@@ -241,7 +254,7 @@ def select_first_detection(detections_log: Sequence[Mapping[str, Any]]) -> Selec
 
 
 def select_recurrant_detection(
-    detections_log: Sequence[Mapping[str, Any]],
+    detections_log: DetectionLog,
     previous_selection: SelectionResult | None = None,
 ) -> SelectionResult:
     if previous_selection is None:
@@ -280,7 +293,7 @@ def select_recurrant_detection(
 
 
 def select_recurrent_detection(
-    detections_log: Sequence[Mapping[str, Any]],
+    detections_log: DetectionLog,
     previous_selection: SelectionResult | None = None,
 ) -> SelectionResult:
     return select_recurrant_detection(detections_log, previous_selection)

@@ -109,6 +109,27 @@ class BaseFusionHead(nn.Module):
             activation=activation,
             convolution=mask_convolution,
         )
+        self.box_projection = nn.Conv2d(1, decode_embed_dim, kernel_size=1, bias=False)
+        nn.init.zeros_(self.box_projection.weight)
+
+    @staticmethod
+    def _rasterize_boxes(
+        boxes: torch.Tensor,
+        *,
+        height: int,
+        width: int,
+    ) -> torch.Tensor:
+        if boxes.ndim != 2 or boxes.shape[1] != 4:
+            raise ValueError(f"Expected normalized boxes shaped [B,4], got {tuple(boxes.shape)}.")
+        y = (torch.arange(height, device=boxes.device, dtype=boxes.dtype) + 0.5) / height
+        x = (torch.arange(width, device=boxes.device, dtype=boxes.dtype) + 0.5) / width
+        inside_y = (y[None, :, None] >= boxes[:, 1, None, None]) & (
+            y[None, :, None] <= boxes[:, 3, None, None]
+        )
+        inside_x = (x[None, None, :] >= boxes[:, 0, None, None]) & (
+            x[None, None, :] <= boxes[:, 2, None, None]
+        )
+        return (inside_y & inside_x).to(boxes.dtype).unsqueeze(1)
 
     def _select_mask_features(
         self,
@@ -154,6 +175,7 @@ class BaseFusionHead(nn.Module):
         text_embeddings: torch.Tensor,
         text_padding_mask: torch.Tensor | None = None,
         *,
+        object_boxes: torch.Tensor | None = None,
         mask_output_size: tuple[int, int] | None = None,
         return_intermediates: bool = True,
     ) -> dict[str, torch.Tensor | list[torch.Tensor] | None]:
@@ -165,6 +187,13 @@ class BaseFusionHead(nn.Module):
         )
 
         mask_features = self._select_mask_features(fused_feature_list, merged_features)
+        if object_boxes is not None:
+            box_masks = self._rasterize_boxes(
+                object_boxes,
+                height=mask_features.shape[-2],
+                width=mask_features.shape[-1],
+            )
+            mask_features = mask_features + self.box_projection(box_masks)
         modulated_features, channel_logits, channel_modulation = self._apply_channel_aggregation(
             mask_features,
             text_embeddings,

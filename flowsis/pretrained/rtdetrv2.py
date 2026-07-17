@@ -139,7 +139,7 @@ class RTDetrV2(nn.Module):
             outputs=outputs if return_outputs else None,
         )
 
-    @torch.no_grad()
+    @torch.inference_mode()
     def infer(
         self,
         images: Image.Image | NDArray | torch.Tensor | Iterable[Image.Image | NDArray | torch.Tensor],
@@ -179,6 +179,46 @@ class RTDetrV2(nn.Module):
             detections=detections,
             encodings=encodings,
             flat_encodings=self._flatten_encodings(encodings) if flatten_outputs else None
+        )
+
+    @torch.inference_mode()
+    def infer_preprocessed(
+        self,
+        pixel_values: torch.Tensor,
+        *,
+        original_sizes: list[tuple[int, int]],
+        threshold: float = 0.1,
+        pixel_mask: torch.Tensor | None = None,
+        flatten_outputs: bool = False,
+    ) -> RTDetrV2InferenceResult:
+        """Infer from an already resized and normalized NCHW tensor."""
+        if pixel_values.ndim != 4:
+            raise ValueError(
+                f"Expected pixel_values shaped [B,C,H,W], got {tuple(pixel_values.shape)}."
+            )
+        if len(original_sizes) != pixel_values.shape[0]:
+            raise ValueError("original_sizes must contain one entry per image.")
+
+        outputs: RTDetrV2ObjectDetectionOutput = self.model(
+            pixel_values=pixel_values.to(self.device),
+            pixel_mask=None if pixel_mask is None else pixel_mask.to(self.device),
+        )
+        assert outputs.logits is not None
+        target_sizes = torch.tensor(
+            original_sizes,
+            dtype=torch.int64,
+            device=outputs.logits.device,
+        )
+        detections = self.processor.post_process_object_detection(
+            outputs,
+            threshold=threshold,
+            target_sizes=target_sizes,  # type: ignore[arg-type]
+        )
+        encodings = cast(list[torch.Tensor], outputs.encoder_last_hidden_state)
+        return RTDetrV2InferenceResult(
+            detections=detections,
+            encodings=encodings,
+            flat_encodings=self._flatten_encodings(encodings) if flatten_outputs else None,
         )
 
     def save_pretrained(self, output_dir: str | Path) -> None:

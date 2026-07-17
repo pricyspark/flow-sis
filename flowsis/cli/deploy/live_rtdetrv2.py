@@ -1,6 +1,9 @@
 import cv2
 import time
 import argparse
+import numpy as np
+import torch
+import torch.nn.functional as F
 from typing import Any
 from pathlib import Path
 from numpy.typing import NDArray
@@ -32,6 +35,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--threshold", type=float, default=0.5)
     parser.add_argument("--image_size", type=int, default=640)
+    parser.add_argument(
+        "--cpu_preprocess",
+        action="store_true",
+        help="Resize, rescale, and normalize frames on CPU instead of CUDA.",
+    )
     return parser.parse_args()
 
 
@@ -102,9 +110,14 @@ def draw_detections(
 ) -> Any:
     rendered = frame_bgr.copy()
 
-    boxes = detections["boxes"].detach().cpu().tolist()
-    scores = detections["scores"].detach().cpu().tolist()
-    labels = detections["labels"].detach().cpu().tolist()
+    # Normalize the small postprocessed result once at the CPU boundary.
+    cpu_detections = {
+        key: value.detach().cpu().tolist()
+        for key, value in detections.items()
+    }
+    boxes = cpu_detections["boxes"]
+    scores = cpu_detections["scores"]
+    labels = cpu_detections["labels"]
 
     for box, score, label_id in zip(boxes, scores, labels):
         x1, y1, x2, y2 = [int(round(value)) for value in box]
@@ -132,11 +145,47 @@ def crop_center_square(arr: NDArray) -> NDArray:
     return arr[top:top + size, left:left + size]
 
 
+def preprocess_on_gpu(
+    frame_bgr: NDArray,
+    *,
+    image_size: int,
+    model: RTDetrV2,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Apply the image processor's numerical transforms on the model device."""
+    processor = model.processor
+    pixels = torch.from_numpy(np.ascontiguousarray(frame_bgr)).to(model.device)
+    pixels = pixels.permute(2, 0, 1).flip(0).unsqueeze(0).float()
+    pixels = F.interpolate(
+        pixels,
+        size=(image_size, image_size),
+        mode="bilinear",
+        align_corners=False,
+        antialias=True,
+    )
+    # The reference processor resizes an 8-bit image before rescaling it.
+    pixels.round_().clamp_(0.0, 255.0)
+
+    if getattr(processor, "do_rescale", True):
+        pixels.mul_(float(getattr(processor, "rescale_factor", 1.0 / 255.0)))
+    if getattr(processor, "do_normalize", False):
+        mean = torch.as_tensor(processor.image_mean, device=model.device).view(1, 3, 1, 1)
+        std = torch.as_tensor(processor.image_std, device=model.device).view(1, 3, 1, 1)
+        pixels.sub_(mean).div_(std)
+
+    pixel_mask = torch.ones(
+        (1, image_size, image_size),
+        dtype=torch.bool,
+        device=model.device,
+    )
+    return pixels, pixel_mask
+
+
 def main() -> None:
     args = parse_args()
     device = get_device()
 
     model = RTDetrV2.from_pretrained(str(args.model_path), device=device)
+    model.eval()
     id2label = load_id2label(model)
 
     video_source = resolve_video_source(args.video_source)
@@ -151,6 +200,7 @@ def main() -> None:
             "video_source": str(args.video_source),
             "threshold": args.threshold,
             "image_size": args.image_size,
+            "device": str(device),
             "labels": id2label,
         },
     )
@@ -161,12 +211,28 @@ def main() -> None:
             if not ret:
                 break
 
-            frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-            square_rgb = crop_center_square(frame_rgb)
             square_bgr = crop_center_square(frame_bgr)
             start_time = time.perf_counter()
-            print(frame_rgb.shape)
-            inference = model.infer([square_rgb], image_size=args.image_size, threshold=args.threshold)
+            if args.cpu_preprocess:
+                square_rgb = cv2.cvtColor(square_bgr, cv2.COLOR_BGR2RGB)
+                inference = model.infer(
+                    [square_rgb],
+                    image_size=args.image_size,
+                    threshold=args.threshold,
+                )
+            else:
+                height, width = square_bgr.shape[:2]
+                pixel_values, pixel_mask = preprocess_on_gpu(
+                    square_bgr,
+                    image_size=args.image_size,
+                    model=model,
+                )
+                inference = model.infer_preprocessed(
+                    pixel_values,
+                    pixel_mask=pixel_mask,
+                    original_sizes=[(height, width)],
+                    threshold=args.threshold,
+                )
             inference_ms = (time.perf_counter() - start_time) * 1000.0
 
             rendered_frame = draw_detections(
