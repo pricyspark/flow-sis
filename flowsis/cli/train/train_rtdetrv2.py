@@ -14,7 +14,12 @@ from datasets import (
     load_from_disk,
 )
 
-from flowsis.pretrained.rtdetrv2 import RTDetrV2
+from flowsis.pretrained import (
+    DETECTOR_ARCHITECTURES,
+    Detector,
+    DetectorArchitecture,
+    load_detector,
+)
 from flowsis.utils import (
     build_autocast_context,
     build_grad_scaler,
@@ -44,14 +49,21 @@ from flowsis.cli.train.training_manifest import write_run_manifest
 AugmentationStep = tuple[str, Any, dict[str, Any]]
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Train RT-DETRv2 on the HF detection dataset used by FlowSIS.")
+    parser = argparse.ArgumentParser(
+        description="Train a supported DETR detector on the FlowSIS detection dataset."
+    )
+    parser.add_argument(
+        "--detector_architecture",
+        choices=DETECTOR_ARCHITECTURES,
+        default="rtdetrv2",
+    )
     parser.add_argument("--dataset_path", type=str, default="data/dataset")
     parser.add_argument("--dataset_name", type=str, default=None)
     parser.add_argument("--dataset_config", type=str, default=None)
     parser.add_argument("--train_split", type=str, default="train")
     parser.add_argument("--validation_split", type=str, default="validation")
     parser.add_argument("--output_dir", type=str, default="outputs/rtdetrv2")
-    parser.add_argument("--model_name_or_path", type=str, default="PekingU/rtdetr_v2_r18vd")
+    parser.add_argument("--model_name_or_path", type=str, default=None)
     parser.add_argument("--epochs", type=int, default=5)
     parser.add_argument("--batch_size", type=int, default=8)
     parser.add_argument("--lr", type=float, default=1e-4)
@@ -326,24 +338,26 @@ def sanity_decode_dataset(
 
 def build_model(
     *,
+    detector_architecture: DetectorArchitecture,
     model_name_or_path: str,
     resume_checkpoint: Path | None,
     num_labels: int,
     id2label: dict[int, str],
     device: torch.device,
-) -> RTDetrV2:
+) -> Detector:
     if resume_checkpoint is not None:
-        return RTDetrV2.from_pretrained(str(resume_checkpoint), device=device)
+        return load_detector(detector_architecture, str(resume_checkpoint), device=device)
 
-    return RTDetrV2.from_pretrained(
-        model_name_or_path=model_name_or_path,
+    return load_detector(
+        detector_architecture,
+        model_name_or_path,
         num_labels=num_labels,
         id2label=id2label,
         device=device,
     )
 
 
-def build_optimizer(model: RTDetrV2, *, lr: float, weight_decay: float) -> AdamW:
+def build_optimizer(model: Detector, *, lr: float, weight_decay: float) -> AdamW:
     return AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
 
 
@@ -377,7 +391,7 @@ def get_epoch_batches(
 
 
 def train_one_epoch(
-    model: RTDetrV2,
+    model: Detector,
     data_loader: DataLoader,
     optimizer: torch.optim.Optimizer,
     scheduler: torch.optim.lr_scheduler.LRScheduler,
@@ -469,7 +483,7 @@ def train_one_epoch(
 
 
 def evaluate(
-    model: RTDetrV2,
+    model: Detector,
     data_loader: DataLoader,
     *,
     image_size: int,
@@ -501,7 +515,7 @@ def evaluate(
     return total_loss / max(total_batches, 1), average_loss_dict(loss_sums, total_batches)
 
 
-def save_final_model(model: RTDetrV2, output_dir: Path) -> Path:
+def save_final_model(model: Detector, output_dir: Path) -> Path:
     final_dir = output_dir / "final"
     model.save_pretrained(final_dir)
     return final_dir
@@ -516,8 +530,9 @@ def run_inference_example(
     image_size: int,
     threshold: float,
     device: torch.device,
+    detector_architecture: DetectorArchitecture,
 ) -> None:
-    model = RTDetrV2.from_pretrained(str(checkpoint_dir), device=device)
+    model = load_detector(detector_architecture, str(checkpoint_dir), device=device)
     sample = dataset[split][index]
     inference = model.infer(
         get_image(sample, convert_mode="RGB"),
@@ -530,8 +545,7 @@ def run_inference_example(
         {
             "checkpoint": str(checkpoint_dir),
             "num_detections": int(first_detection["scores"].numel()),
-            "patch_tokens_shape": tuple(inference.encodings["patch_tokens"].shape),
-            "image_embedding_shape": tuple(inference.encodings["image_embedding"].shape),
+            "feature_map_shapes": [tuple(feature.shape) for feature in inference.encodings],
         },
     )
 
@@ -560,8 +574,15 @@ def main() -> None:
 
     num_labels, id2label = load_label_metadata(dataset, args.train_split)
     resume_checkpoint = resolve_resume_checkpoint(args.resume_from)
+    detector_architecture = cast(DetectorArchitecture, args.detector_architecture)
+    model_name_or_path = args.model_name_or_path or (
+        "ustc-community/dfine-medium-obj365"
+        if detector_architecture == "dfine"
+        else "PekingU/rtdetr_v2_r50vd"
+    )
     model = build_model(
-        model_name_or_path=args.model_name_or_path,
+        detector_architecture=detector_architecture,
+        model_name_or_path=model_name_or_path,
         resume_checkpoint=resume_checkpoint,
         num_labels=num_labels,
         id2label=id2label,
@@ -573,6 +594,8 @@ def main() -> None:
         model_config=model.model.config.to_dict(),
         resolved={
             "device": str(device),
+            "detector_architecture": detector_architecture,
+            "model_name_or_path": model_name_or_path,
             "num_labels": num_labels,
             "id2label": id2label,
             "resume_checkpoint": None if resume_checkpoint is None else str(resume_checkpoint),
@@ -753,6 +776,7 @@ def main() -> None:
             image_size=args.image_size,
             threshold=args.score_threshold,
             device=device,
+            detector_architecture=detector_architecture,
         )
 
 

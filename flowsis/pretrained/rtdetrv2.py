@@ -230,7 +230,7 @@ class RTDetrV2(nn.Module):
     @classmethod
     def from_pretrained(
         cls,
-        model_name_or_path: str = "PekingU/rtdetr_v2_r18vd",
+        model_name_or_path: str = "PekingU/rtdetr_v2_r50vd",
         *,
         cache_dir: str = "flowsis/models",
         num_labels: int | None = None,

@@ -30,7 +30,7 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=DEFAULT_FEATURE_CACHE_DIR,
         help=(
-            "Root directory for cached RT-DETRv2 feature maps. The builder stores a "
+            "Root directory for cached detector feature maps. The builder stores a "
             "per-example cache_dir path, but does not require the directory to exist yet."
         ),
     )
@@ -221,7 +221,8 @@ def build_dataset(
             "notes": [
                 "Segmentation labels, masks, and prompt embeddings are object-level fields.",
                 "Online augmentation may add objects; every surviving object becomes a mask query.",
-                "For offline cached-feature training, precompute RT-DETRv2 feature maps into cache_dir.",
+                "For offline cached-feature training, precompute feature maps "
+                "from the selected detector into cache_dir.",
                 "For staged training, reuse the same dataset and switch only the training phase.",
             ],
         },

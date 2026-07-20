@@ -14,7 +14,7 @@ class ImageTextFusion(nn.Module):
     Stack multiple image/text fusion blocks and optionally merge scales.
 
     Accepts either a single `[B, C, H, W]` feature map or a multi-scale list of
-    RT-DETRv2 encoder features ordered from highest to lowest resolution.
+    detector encoder features ordered from highest to lowest resolution.
     """
 
     def __init__(

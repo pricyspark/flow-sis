@@ -10,10 +10,10 @@ from numpy.typing import NDArray
 from collections.abc import Mapping
 
 from flowsis.utils import get_device
-from flowsis.pretrained.rtdetrv2 import RTDetrV2
+from flowsis.pretrained import DETECTOR_ARCHITECTURES, Detector, load_detector
 
 
-WINDOW_NAME = "RT-DETRv2 Live Inference"
+WINDOW_NAME = "FlowSIS Detector Live Inference"
 BOX_COLORS = [
     (255, 90, 95),
     (46, 196, 182),
@@ -25,7 +25,14 @@ BOX_COLORS = [
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run live inference with a trained RT-DETRv2 object detector.")
+    parser = argparse.ArgumentParser(
+        description="Run live inference with a supported DETR detector."
+    )
+    parser.add_argument(
+        "--detector_architecture",
+        choices=DETECTOR_ARCHITECTURES,
+        default="rtdetrv2",
+    )
     parser.add_argument("--model_path", type=Path, default=Path("outputs/rtdetrv2/final"))
     parser.add_argument(
         "--video_source",
@@ -51,7 +58,7 @@ def resolve_video_source(video_source: str) -> int | str:
     return video_source
 
 
-def load_id2label(model: RTDetrV2) -> dict[int, str]:
+def load_id2label(model: Detector) -> dict[int, str]:
     raw_id2label = getattr(model.model.config, "id2label", None)
     if isinstance(raw_id2label, Mapping):
         normalized = {
@@ -149,7 +156,7 @@ def preprocess_on_gpu(
     frame_bgr: NDArray,
     *,
     image_size: int,
-    model: RTDetrV2,
+    model: Detector,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Apply the image processor's numerical transforms on the model device."""
     processor = model.processor
@@ -184,7 +191,7 @@ def main() -> None:
     args = parse_args()
     device = get_device()
 
-    model = RTDetrV2.from_pretrained(str(args.model_path), device=device)
+    model = load_detector(args.detector_architecture, str(args.model_path), device=device)
     model.eval()
     id2label = load_id2label(model)
 

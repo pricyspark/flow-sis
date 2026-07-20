@@ -15,6 +15,9 @@ include = ["flowsis*"]
 [project.scripts]
 flowsis-live-rtdetrv2 = "flowsis.cli.deploy.live_rtdetrv2:main"
 flowsis-train-rtdetrv2 = "flowsis.cli.train.train_rtdetrv2:main"
+flowsis-live-detector = "flowsis.cli.deploy.live_rtdetrv2:main"
+flowsis-evaluate-detector = "flowsis.cli.eval.evaluate_rtdetrv2:main"
+flowsis-train-detector = "flowsis.cli.train.train_rtdetrv2:main"
 flowsis-train-base-head = "flowsis.cli.train.train_base_head:main"
 flowsis-visualize-detection-dataset = "flowsis.cli.data.visualize_hf_detection_dataset:main"
 flowsis-embed-text-prompts = "flowsis.cli.data.embed_text_prompts:main"

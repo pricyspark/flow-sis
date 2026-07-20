@@ -1,4 +1,4 @@
-"""Evaluate an RT-DETRv2 checkpoint with confidence-ranked PR curves."""
+"""Evaluate a supported DETR checkpoint with confidence-ranked PR curves."""
 
 import argparse
 import csv
@@ -14,12 +14,17 @@ from datasets import ClassLabel, Dataset, DatasetDict, load_from_disk
 
 from flowsis.data.images import get_image
 from flowsis.data.object_records import get_object_feature_schema, get_object_records
-from flowsis.pretrained.rtdetrv2 import RTDetrV2
+from flowsis.pretrained import DETECTOR_ARCHITECTURES, load_detector
 from flowsis.utils import get_device
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--detector_architecture",
+        choices=DETECTOR_ARCHITECTURES,
+        default="rtdetrv2",
+    )
     parser.add_argument("--model_path", default="outputs/rtdetrv2/final")
     parser.add_argument("--dataset_path", default="data/dataset")
     parser.add_argument("--split", default="test")
@@ -88,7 +93,8 @@ def main() -> None:
     split = loaded[args.split]
     names = label_names(split)
     device = torch.device(args.device) if args.device else get_device()
-    model = RTDetrV2.from_pretrained(args.model_path, device=device)
+    architecture = args.detector_architecture
+    model = load_detector(architecture, args.model_path, device=device)
 
     ground_truth: dict[int, dict[int, np.ndarray]] = {}
     positives: defaultdict[int, int] = defaultdict(int)
@@ -167,7 +173,7 @@ def main() -> None:
         axis.plot(metric["recall"], metric["precision"], label=f"{names[label]} (AP={metric['ap']:.3f})")
     axis.plot(micro["recall"], micro["precision"], "k--", linewidth=2, label=f"micro (AP={micro['ap']:.3f})")
     axis.set(xlim=(0, 1), ylim=(0, 1.01), xlabel="Recall", ylabel="Precision",
-             title=f"RT-DETRv2 precision-recall at IoU {args.iou_threshold:.2f}")
+             title=f"{architecture} precision-recall at IoU {args.iou_threshold:.2f}")
     axis.grid(alpha=0.25)
     axis.legend(loc="lower left", fontsize="small")
     figure.tight_layout()

@@ -14,7 +14,7 @@ import torch
 import torch.nn.functional as F
 
 from flowsis.base_head import BaseFusionHead
-from flowsis.pretrained.rtdetrv2 import RTDetrV2
+from flowsis.pretrained import DETECTOR_ARCHITECTURES, Detector, load_detector
 from flowsis.selection import SelectionResult, select_first_detection, select_recurrent_detection
 from flowsis.utils import build_autocast_context, get_device
 
@@ -49,7 +49,12 @@ DEFAULT_HEAD_CONFIG: dict[str, Any] = {
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run RT-DETRv2 selection and FlowSIS mask inference on a video or camera feed."
+        description="Run detector selection and FlowSIS mask inference on a video or camera feed."
+    )
+    parser.add_argument(
+        "--detector_architecture",
+        choices=DETECTOR_ARCHITECTURES,
+        default="rtdetrv2",
     )
     parser.add_argument("--detector_path", type=Path, default=Path("outputs/rtdetrv2/final"))
     parser.add_argument("--head_path", type=Path, default=Path("outputs/base/final"))
@@ -207,7 +212,7 @@ def infer_head_config(state_dict: Mapping[str, torch.Tensor]) -> dict[str, Any]:
     return config
 
 
-def load_id2label(model: RTDetrV2) -> dict[int, str]:
+def load_id2label(model: Detector) -> dict[int, str]:
     raw = getattr(model.model.config, "id2label", None)
     if isinstance(raw, Mapping):
         labels = {int(index): str(label) for index, label in raw.items()}
@@ -248,7 +253,7 @@ def preprocess_on_gpu(
     frame_bgr: np.ndarray,
     *,
     image_size: int,
-    model: RTDetrV2,
+    model: Detector,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Apply the detector image processor's numerical transforms on CUDA."""
     processor = model.processor
@@ -396,7 +401,11 @@ def main() -> None:
         raise ValueError("--no_display requires --output_path.")
 
     device = torch.device(args.device) if args.device else get_device()
-    detector = RTDetrV2.from_pretrained(str(args.detector_path), device=device)
+    detector = load_detector(
+        args.detector_architecture,
+        str(args.detector_path),
+        device=device,
+    )
     detector.eval()
     head, weights_path = load_head(args.head_path, device=device)
     id2label = load_id2label(detector)

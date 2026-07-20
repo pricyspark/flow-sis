@@ -19,7 +19,12 @@ from flowsis.data import CallablePipeline, PreparedDataset, load_object_image
 from flowsis.data.augment import center_square_augment, overlap_augment, photometric_augment, roi_square_augment, rotation_augment
 from flowsis.data.images import get_image
 from flowsis.data.masks import load_binary
-from flowsis.pretrained import RTDetrV2
+from flowsis.pretrained import (
+    DETECTOR_ARCHITECTURES,
+    Detector,
+    extract_feature_maps,
+    load_detector,
+)
 from flowsis.cli.train.training_manifest import write_run_manifest
 from flowsis.utils import (
     build_autocast_context,
@@ -37,8 +42,8 @@ PhaseName = Literal["offline", "online"]
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Train the FlowSIS base fusion head with cached RT-DETRv2 features, "
-            "online frozen RT-DETRv2 features, or a staged combination of both."
+            "Train the FlowSIS base fusion head with cached detector features, "
+            "online frozen detector features, or a staged combination of both."
         ),
     )
     parser.add_argument("--dataset_path", type=str, default="data/segmentation-dataset")
@@ -46,7 +51,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--validation_split", type=str, default="validation")
     parser.add_argument("--output_dir", type=str, default="outputs/base")
     parser.add_argument("--resume_from", type=str, default=None)
-    parser.add_argument("--rtdetrv2_name_or_path", type=str, default="PekingU/rtdetr_v2_r18vd")
+    parser.add_argument("--rtdetrv2_name_or_path", type=str, default="PekingU/rtdetr_v2_r50vd")
+    parser.add_argument(
+        "--detector_architecture",
+        choices=DETECTOR_ARCHITECTURES,
+        default="rtdetrv2",
+    )
+    parser.add_argument(
+        "--detector_name_or_path",
+        type=str,
+        default=None,
+        help=(
+            "Detector checkpoint or model id. Overrides the legacy "
+            "--rtdetrv2_name_or_path option."
+        ),
+    )
     parser.add_argument(
         "--train_stages",
         type=str,
@@ -468,28 +487,31 @@ def build_head(args: argparse.Namespace, device: torch.device) -> BaseFusionHead
     return head.to(device)
 
 
-def build_frozen_encoder(args: argparse.Namespace, device: torch.device) -> RTDetrV2:
-    model = RTDetrV2.from_pretrained(args.rtdetrv2_name_or_path, device=device)
+def build_frozen_encoder(args: argparse.Namespace, device: torch.device) -> Detector:
+    model_name_or_path = args.detector_name_or_path
+    if model_name_or_path is None:
+        model_name_or_path = (
+            "ustc-community/dfine-medium-obj365"
+            if args.detector_architecture == "dfine"
+            else args.rtdetrv2_name_or_path
+        )
+    model = load_detector(
+        args.detector_architecture,
+        model_name_or_path,
+        device=device,
+    )
     model.eval()
     model.requires_grad_(False)
     return model
 
 
 def extract_online_feature_maps(
-    model: RTDetrV2,
+    model: Detector,
     images: Iterable[Image.Image],
     *,
     image_size: int,
 ) -> list[torch.Tensor]:
-    batch = model.preprocess(images, annotations=None, image_size=image_size)
-    outputs = model.model(
-        pixel_values=batch["pixel_values"],
-        pixel_mask=batch.get("pixel_mask"),
-    )
-    encoder_feature_maps = cast(list[torch.Tensor], outputs.encoder_last_hidden_state)
-    if not encoder_feature_maps:
-        raise RuntimeError("RT-DETRv2 did not return encoder feature maps for online base training.")
-    return [feature_map.float() for feature_map in encoder_feature_maps]
+    return extract_feature_maps(model, images, image_size=image_size)
 
 
 def compute_segmentation_objective(
@@ -557,7 +579,7 @@ def compute_batch_loss(
     batch: dict[str, Any],
     *,
     device: torch.device,
-    online_encoder: RTDetrV2 | None,
+    online_encoder: Detector | None,
     image_size: int,
     use_amp: bool,
     bce_weight: float,
@@ -589,7 +611,7 @@ def compute_batch_loss(
         multi_image_features = [feature_level.to(device) for feature_level in batch["multi_image_features"]]
     else:
         if online_encoder is None:
-            raise RuntimeError("Online stage requires a frozen RT-DETRv2 encoder.")
+            raise RuntimeError("Online stage requires a frozen detector encoder.")
         with torch.no_grad():
             multi_image_features = extract_online_feature_maps(
                 online_encoder,
@@ -719,7 +741,7 @@ def train_one_epoch(
     max_steps: int | None,
     device: torch.device,
     image_size: int,
-    online_encoder: RTDetrV2 | None,
+    online_encoder: Detector | None,
     use_amp: bool,
     scaler: torch.cuda.amp.GradScaler | None,
     bce_weight: float,
@@ -807,7 +829,7 @@ def evaluate(
     phase: PhaseName,
     device: torch.device,
     image_size: int,
-    online_encoder: RTDetrV2 | None,
+    online_encoder: Detector | None,
     use_amp: bool,
     bce_weight: float,
     dice_weight: float,
