@@ -67,8 +67,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--epochs", type=int, default=5)
     parser.add_argument("--batch_size", type=int, default=8)
     parser.add_argument("--lr", type=float, default=1e-4)
+    parser.add_argument(
+        "--backbone_lr",
+        type=float,
+        default=None,
+        help="Learning rate for backbone parameters. Defaults to --lr.",
+    )
     parser.add_argument("--weight_decay", type=float, default=1e-4)
     parser.add_argument("--warmup_steps", type=int, default=0)
+    parser.add_argument(
+        "--max_grad_norm",
+        type=float,
+        default=None,
+        help="Clip the total gradient norm to this value. Disabled by default.",
+    )
     parser.add_argument("--image_size", type=int, default=640)
     parser.add_argument("--max_steps", type=int, default=None)
     parser.add_argument("--save_every_epochs", type=int, default=1)
@@ -357,8 +369,41 @@ def build_model(
     )
 
 
-def build_optimizer(model: Detector, *, lr: float, weight_decay: float) -> AdamW:
-    return AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
+def build_optimizer(
+    model: Detector,
+    *,
+    lr: float,
+    backbone_lr: float | None,
+    weight_decay: float,
+) -> AdamW:
+    if backbone_lr is None:
+        return AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
+
+    backbone_parameters: list[torch.nn.Parameter] = []
+    other_parameters: list[torch.nn.Parameter] = []
+    for name, parameter in model.model.named_parameters():
+        if not parameter.requires_grad:
+            continue
+        parameter_group = (
+            backbone_parameters if "backbone" in name.split(".") else other_parameters
+        )
+        parameter_group.append(parameter)
+
+    if not backbone_parameters:
+        raise ValueError(
+            "--backbone_lr was set, but the model has no parameters in a module "
+            "named 'backbone'."
+        )
+    if not other_parameters:
+        raise ValueError("The model has no trainable non-backbone parameters.")
+
+    return AdamW(
+        [
+            {"params": backbone_parameters, "lr": backbone_lr},
+            {"params": other_parameters, "lr": lr},
+        ],
+        weight_decay=weight_decay,
+    )
 
 
 def build_scheduler(
@@ -404,6 +449,7 @@ def train_one_epoch(
     device: torch.device,
     use_amp: bool,
     scaler: torch.cuda.amp.GradScaler | None,
+    max_grad_norm: float | None,
 ) -> tuple[dict[str, Any], int]:
     start = time.perf_counter()
     model.train()
@@ -438,10 +484,15 @@ def train_one_epoch(
 
         if scaler is not None:
             scaler.scale(loss).backward()
+            if max_grad_norm is not None:
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
             scaler.step(optimizer)
             scaler.update()
         else:
             loss.backward()
+            if max_grad_norm is not None:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
             optimizer.step()
 
         scheduler.step()
@@ -552,6 +603,12 @@ def run_inference_example(
 
 def main() -> None:
     args = parse_args()
+    if args.lr <= 0:
+        raise ValueError("--lr must be positive.")
+    if args.backbone_lr is not None and args.backbone_lr <= 0:
+        raise ValueError("--backbone_lr must be positive.")
+    if args.max_grad_norm is not None and args.max_grad_norm <= 0:
+        raise ValueError("--max_grad_norm must be positive.")
     set_seed(args.seed)
 
     device = torch.device(args.device) if args.device is not None else get_device()
@@ -660,7 +717,12 @@ def main() -> None:
         max_steps=args.max_steps,
         overfit_single_batch=args.overfit_single_batch,
     )
-    optimizer = build_optimizer(model, lr=args.lr, weight_decay=args.weight_decay)
+    optimizer = build_optimizer(
+        model,
+        lr=args.lr,
+        backbone_lr=args.backbone_lr,
+        weight_decay=args.weight_decay,
+    )
     scheduler = build_scheduler(
         optimizer,
         warmup_steps=args.warmup_steps,
@@ -706,6 +768,7 @@ def main() -> None:
             device=device,
             use_amp=args.amp,
             scaler=scaler,
+            max_grad_norm=args.max_grad_norm,
         )
         log_event("train_epoch", epoch_summary)
 
