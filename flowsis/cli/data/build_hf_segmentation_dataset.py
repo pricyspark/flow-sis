@@ -31,7 +31,8 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_FEATURE_CACHE_DIR,
         help=(
             "Root directory for cached detector feature maps. The builder stores a "
-            "per-example cache_dir path, but does not require the directory to exist yet."
+            "per-example cache_dir path for a future versioned feature_bundle.pt, "
+            "but does not require the directory to exist yet."
         ),
     )
     parser.add_argument("--output_path", type=Path, default=DEFAULT_OUTPUT_PATH)
@@ -221,8 +222,8 @@ def build_dataset(
             "notes": [
                 "Segmentation labels, masks, and prompt embeddings are object-level fields.",
                 "Online augmentation may add objects; every surviving object becomes a mask query.",
-                "For offline cached-feature training, precompute feature maps "
-                "from the selected detector into cache_dir.",
+                "Offline training expects versioned feature_bundle.pt artifacts; "
+                "cache generation is not implemented yet.",
                 "For staged training, reuse the same dataset and switch only the training phase.",
             ],
         },

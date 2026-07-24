@@ -8,6 +8,8 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 
+from flowsis.artifacts import atomic_write_text
+
 
 def _package_versions() -> dict[str, str]:
     versions = {}
@@ -62,6 +64,8 @@ def write_run_manifest(
         },
     }
     path = output_dir / "run_config.json"
-    path.write_text(json.dumps(manifest, indent=2, sort_keys=True, default=str) + "\n")
+    atomic_write_text(
+        path,
+        json.dumps(manifest, indent=2, sort_keys=True, default=str) + "\n",
+    )
     return path
-

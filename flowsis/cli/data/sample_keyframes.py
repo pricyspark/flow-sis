@@ -1,6 +1,7 @@
 import cv2
 import time
 import argparse
+import csv
 import imagehash
 import numpy as np
 from PIL import Image
@@ -8,12 +9,27 @@ from pathlib import Path
 from numpy.typing import NDArray
 from dataclasses import dataclass
 from typing import Optional, Literal
+from collections import defaultdict
 from sklearn.cluster import AgglomerativeClustering
 
 
 DEFAULT_VIDEO_DIR = Path("data/raw")
 DEFAULT_FRAME_DIR = Path("data/frames")
 DEFAULT_MANIFEST_DIR = Path("data/manifests")
+FRAME_MANIFEST_FIELDS = [
+    "video_path",
+    "id",
+    "height",
+    "width",
+    "video_id",
+    "cluster_id",
+    "frame_idx",
+    "blur_score",
+    "cluster_size",
+    "candidate_count",
+    "avg_hamming",
+    "output_path",
+]
 
 
 @dataclass
@@ -42,6 +58,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--video_dir", type=Path, default=DEFAULT_VIDEO_DIR)
     parser.add_argument("--frame_dir", type=Path, default=DEFAULT_FRAME_DIR)
     parser.add_argument("--manifest_dir", type=Path, default=DEFAULT_MANIFEST_DIR)
+    parser.add_argument(
+        "--frame_manifest",
+        type=Path,
+        default=None,
+        help="Optional existing frame manifest to resample from instead of analyzing videos.",
+    )
     return parser.parse_args()
 
 
@@ -295,6 +317,67 @@ def sample_video(
     return samples
 
 
+def build_manifest_id(video_idx: int, cluster_id: int, frame_idx: int) -> int:
+    return (
+        (video_idx + 1) * int(1e10)
+        + (cluster_id + 1) * int(1e6)
+        + frame_idx
+    )
+
+
+def build_output_path(
+    output_dir: Path,
+    video_path: Path,
+    frame_idx: int,
+    cluster_id: int,
+    img_ext: str,
+) -> Path:
+    return (
+        output_dir
+        / video_path.stem
+        / f"frame-{frame_idx:06d}_cluster-{cluster_id:04d}{img_ext}"
+    )
+
+
+def build_manifest_row(
+    *,
+    video_path: Path,
+    height: int,
+    width: int,
+    video_id: int,
+    cluster_id: int,
+    frame_idx: int,
+    blur_score: float,
+    cluster_size: int,
+    candidate_count: int,
+    avg_hamming: float,
+    output_path: Path,
+) -> dict[str, str]:
+    return {
+        "video_path": str(video_path),
+        "id": str(build_manifest_id(video_id, cluster_id, frame_idx)),
+        "height": str(height),
+        "width": str(width),
+        "video_id": str(video_id),
+        "cluster_id": str(cluster_id),
+        "frame_idx": str(frame_idx),
+        "blur_score": f"{blur_score:.4f}",
+        "cluster_size": str(cluster_size),
+        "candidate_count": str(candidate_count),
+        "avg_hamming": f"{avg_hamming:.4f}",
+        "output_path": str(output_path),
+    }
+
+
+def write_manifest(rows: list[dict[str, str]], manifest_dir: Path) -> None:
+    manifest_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = manifest_dir / "frame_manifest.csv"
+    with manifest_path.open("w", newline="", encoding="utf-8") as file:
+        writer = csv.DictWriter(file, fieldnames=FRAME_MANIFEST_FIELDS)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
 def save_samples(
     samples: list[ClusterSample],
     output_dir: Path,
@@ -303,23 +386,18 @@ def save_samples(
     jpeg_quality: int = 95,
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
-    
-    manifest_rows = [
-        "video_path,id,height,width,video_id,cluster_id,frame_idx,blur_score,cluster_size,candidate_count,avg_hamming,output_path"
-    ]
+    manifest_rows: list[dict[str, str]] = []
     
     for sample in samples:
         record = sample.selected
-        
-        video_dir = output_dir / f"{record.video_path.stem}"
-        video_dir.mkdir(parents=True, exist_ok=True)
-        filename = (
-            f"frame-{record.frame_idx:06d}"
-            f"_cluster-{sample.cluster_id:04d}"
-            f"{img_ext}"
+        output_path = build_output_path(
+            output_dir=output_dir,
+            video_path=record.video_path,
+            frame_idx=record.frame_idx,
+            cluster_id=sample.cluster_id,
+            img_ext=img_ext,
         )
-        
-        output_path = video_dir / filename
+        output_path.parent.mkdir(parents=True, exist_ok=True)
         if img_ext.lower() in (".jpg", ".jpeg"):
             cv2.imwrite(
                 str(output_path),
@@ -328,34 +406,135 @@ def save_samples(
             )
         else:
             cv2.imwrite(str(output_path), record.frame_bgr)
-            
-        manifest_id = (
-            (record.video_idx + 1) * int(1e10)
-            + (sample.cluster_id + 1) * int(1e6)
-            + record.frame_idx
-        )
-            
+
         manifest_rows.append(
-            ",".join(
-                [
-                    str(record.video_path),
-                    str(manifest_id),
-                    str(record.height),
-                    str(record.width),
-                    str(record.video_idx),
-                    str(sample.cluster_id),
-                    str(record.frame_idx),
-                    f"{record.blur_score:.4f}",
-                    str(sample.cluster_size),
-                    str(sample.candidate_count),
-                    f"{sample.avg_hamming:.4f}",
-                    str(output_path),
-                ]
+            build_manifest_row(
+                video_path=record.video_path,
+                height=record.height,
+                width=record.width,
+                video_id=record.video_idx,
+                cluster_id=sample.cluster_id,
+                frame_idx=record.frame_idx,
+                blur_score=record.blur_score,
+                cluster_size=sample.cluster_size,
+                candidate_count=sample.candidate_count,
+                avg_hamming=sample.avg_hamming,
+                output_path=output_path,
             )
         )
-        
-    manifest_path = manifest_dir / "frame_manifest.csv"
-    manifest_path.write_text("\n".join(manifest_rows), encoding="utf-8")
+
+    write_manifest(manifest_rows, manifest_dir)
+
+
+def resolve_manifest_video_path(video_path_value: str, video_dir: Path) -> Path | None:
+    manifest_video_path = Path(video_path_value).expanduser()
+    candidates = [manifest_video_path]
+
+    if manifest_video_path.parent != Path("."):
+        candidates.append(video_dir / manifest_video_path.name)
+    else:
+        candidates.append(video_dir / manifest_video_path)
+
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+
+    return None
+
+
+def resample_from_manifest(
+    frame_manifest: Path,
+    video_dir: Path,
+    output_dir: Path,
+    manifest_dir: Path,
+) -> None:
+    with frame_manifest.open(newline="", encoding="utf-8") as file:
+        rows = list(csv.DictReader(file))
+
+    rows_by_video: dict[Path, list[tuple[int, dict[str, str]]]] = defaultdict(list)
+    missing_videos: set[str] = set()
+    for row_idx, row in enumerate(rows):
+        resolved_video_path = resolve_manifest_video_path(row["video_path"], video_dir)
+        if resolved_video_path is None:
+            missing_videos.add(row["video_path"])
+            continue
+
+        rows_by_video[resolved_video_path].append((row_idx, row))
+
+    if missing_videos:
+        print(
+            "sample_keyframes_warning",
+            {
+                "missing_videos": sorted(missing_videos),
+                "num_missing_videos": len(missing_videos),
+            },
+        )
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    saved_rows: dict[int, dict[str, str]] = {}
+    unreadable_frames: list[dict[str, str | int]] = []
+
+    for video_path, video_rows in rows_by_video.items():
+        cap = cv2.VideoCapture(str(video_path))
+        if not cap.isOpened():
+            print(
+                "sample_keyframes_warning",
+                {"video_path": str(video_path), "warning": "Unable to open video. Skipping."},
+            )
+            continue
+
+        for row_idx, row in sorted(video_rows, key=lambda item: int(item[1]["frame_idx"])):
+            frame_idx = int(row["frame_idx"])
+            cluster_id = int(row["cluster_id"])
+            output_path_value = row.get("output_path", "")
+            img_ext = Path(output_path_value).suffix or ".jpg"
+            output_path = build_output_path(
+                output_dir=output_dir,
+                video_path=video_path,
+                frame_idx=frame_idx,
+                cluster_id=cluster_id,
+                img_ext=img_ext,
+            )
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+
+            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+            ok, frame = cap.read()
+            if not ok:
+                unreadable_frames.append({"video_path": str(video_path), "frame_idx": frame_idx})
+                continue
+
+            if img_ext.lower() in (".jpg", ".jpeg"):
+                cv2.imwrite(str(output_path), frame, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
+            else:
+                cv2.imwrite(str(output_path), frame)
+
+            saved_rows[row_idx] = {
+                **row,
+                "video_path": str(video_path),
+                "output_path": str(output_path),
+            }
+
+        cap.release()
+
+    if unreadable_frames:
+        print(
+            "sample_keyframes_warning",
+            {
+                "unreadable_frames": unreadable_frames[:10],
+                "num_unreadable_frames": len(unreadable_frames),
+            },
+        )
+
+    ordered_rows = [saved_rows[row_idx] for row_idx in range(len(rows)) if row_idx in saved_rows]
+    write_manifest(ordered_rows, manifest_dir)
+    print(
+        "sample_keyframes",
+        {
+            "manifest_path": str(manifest_dir / "frame_manifest.csv"),
+            "num_rows": len(ordered_rows),
+            "source_manifest": str(frame_manifest),
+        },
+    )
     
     
 def main():
@@ -364,6 +543,15 @@ def main():
     assert not args.frame_dir.is_file()
     assert not args.manifest_dir.is_file()
     
+    if args.frame_manifest is not None:
+        resample_from_manifest(
+            frame_manifest=args.frame_manifest,
+            video_dir=args.video_dir,
+            output_dir=args.frame_dir,
+            manifest_dir=args.manifest_dir,
+        )
+        return
+
     # This may get pretty large if there's lots of data, maybe periodically flush buffer to file
     all_samples = []
     for video in args.video_dir.rglob("*.mp4"):

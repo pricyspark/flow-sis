@@ -1,6 +1,5 @@
 import time
 import argparse
-import json
 from collections.abc import Iterable
 from functools import partial
 from pathlib import Path
@@ -8,22 +7,42 @@ from typing import Any, Literal, cast
 
 import torch
 import torch.nn.functional as F
-from datasets import Dataset, DatasetDict, load_from_disk
+from datasets import Dataset, DatasetDict
 from PIL import Image
 from torch.optim import AdamW
 from torch.utils.data import DataLoader
 from transformers import get_scheduler
 
 from flowsis.base_head import BaseFusionHead
-from flowsis.data import CallablePipeline, PreparedDataset, load_object_image
-from flowsis.data.augment import center_square_augment, overlap_augment, photometric_augment, roi_square_augment, rotation_augment
+from flowsis.artifacts import atomic_write_text
+from flowsis.data import (
+    CallablePipeline,
+    PreparedDataset,
+    load_feature_bundle,
+    load_object_image,
+)
+from flowsis.data.augment import (
+    center_square_augment,
+    overlap_augment,
+    photometric_augment,
+    roi_square_augment,
+    rotation_augment,
+)
 from flowsis.data.images import get_image
 from flowsis.data.masks import load_binary
+from flowsis.head_checkpoint import (
+    load_head_checkpoint as load_head_bundle,
+    save_head_checkpoint as save_head_bundle,
+)
 from flowsis.pretrained import (
-    DETECTOR_ARCHITECTURES,
     Detector,
-    extract_feature_maps,
     load_detector,
+)
+from flowsis.cli.common import (
+    add_detector_arguments,
+    dataset_from_args,
+    ensure_split_exists,
+    log_event,
 )
 from flowsis.cli.train.training_manifest import write_run_manifest
 from flowsis.utils import (
@@ -32,6 +51,7 @@ from flowsis.utils import (
     get_device,
     load_training_state,
     resolve_resume_checkpoint,
+    save_training_state,
     set_seed,
 )
 
@@ -51,20 +71,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--validation_split", type=str, default="validation")
     parser.add_argument("--output_dir", type=str, default="outputs/base")
     parser.add_argument("--resume_from", type=str, default=None)
-    parser.add_argument("--rtdetrv2_name_or_path", type=str, default="PekingU/rtdetr_v2_r50vd")
-    parser.add_argument(
-        "--detector_architecture",
-        choices=DETECTOR_ARCHITECTURES,
-        default="rtdetrv2",
-    )
-    parser.add_argument(
-        "--detector_name_or_path",
-        type=str,
-        default=None,
-        help=(
-            "Detector checkpoint or model id. Overrides the legacy "
-            "--rtdetrv2_name_or_path option."
-        ),
+    add_detector_arguments(
+        parser,
+        model_flag="--detector-model",
+        model_dest="detector_name_or_path",
     )
     parser.add_argument(
         "--train_stages",
@@ -142,11 +152,27 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dropout", type=float, default=0.1)
     parser.add_argument("--activation", type=str, choices=("gelu", "relu"), default="gelu")
     parser.add_argument("--num_feature_levels", type=int, default=3)
-    parser.add_argument("--decode_pos_encode", type=str, choices=("none", "first", "second", "all"), default="first")
-    parser.add_argument("--image_self_attention", type=str, choices=("GLOBAL", "WINDOW", "none"), default="WINDOW")
+    parser.add_argument(
+        "--decode_pos_encode",
+        choices=("none", "first", "second", "all"),
+        default="first",
+    )
+    parser.add_argument(
+        "--image_self_attention",
+        choices=("GLOBAL", "WINDOW", "none"),
+        default="WINDOW",
+    )
     parser.add_argument("--decode_window_size", type=int, default=8)
-    parser.add_argument("--use_shifted_windows", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--multiscale_merge", type=str, choices=("conv", "deformable", "none"), default="conv")
+    parser.add_argument(
+        "--use_shifted_windows",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
+    parser.add_argument(
+        "--multiscale_merge",
+        choices=("conv", "deformable", "none"),
+        default="conv",
+    )
     parser.add_argument(
         "--conv_merge_refinement",
         choices=("standard", "depthwise"),
@@ -155,10 +181,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--deformable_num_points", type=int, default=4)
     parser.add_argument("--deformable_offset_scale", type=float, default=2.0)
     parser.add_argument("--aggregator_dim", type=int, default=None)
-    parser.add_argument("--channel_aggregation", type=str, choices=("none", "sigmoid", "softmax"), default="none")
-    parser.add_argument("--mask_feature_source", type=str, choices=("merged", "highest_resolution"), default="merged")
+    parser.add_argument(
+        "--channel_aggregation",
+        choices=("none", "sigmoid", "softmax"),
+        default="none",
+    )
+    parser.add_argument(
+        "--mask_feature_source",
+        choices=("merged", "highest_resolution"),
+        default="merged",
+    )
     parser.add_argument("--mask_head_hidden_dim", type=int, default=None)
     parser.add_argument("--mask_output_dim", type=int, default=1)
+    parser.add_argument(
+        "--mask_upsample_scales",
+        type=int,
+        nargs="+",
+        default=(2, 2),
+    )
     parser.add_argument(
         "--mask_convolution",
         choices=("standard", "depthwise_separable"),
@@ -174,10 +214,6 @@ def parse_args() -> argparse.Namespace:
         help="Probability of dropping each prompt vector during training; one is always kept.",
     )
     return parser.parse_args()
-
-
-def log_event(name: str, payload: dict[str, Any]) -> None:
-    print(name, payload)
 
 
 def parse_stage_spec(spec: str) -> list[tuple[PhaseName, int]]:
@@ -197,18 +233,6 @@ def parse_stage_spec(spec: str) -> list[tuple[PhaseName, int]]:
     if not stages:
         raise ValueError("At least one training stage is required.")
     return stages
-
-
-def load_segmentation_dataset(dataset_path: str | Path) -> DatasetDict:
-    dataset = load_from_disk(str(dataset_path))
-    if isinstance(dataset, Dataset):
-        raise TypeError("Expected a DatasetDict for segmentation training.")
-    return dataset
-
-
-def ensure_split_exists(dataset: DatasetDict, split_name: str, *, role: str) -> None:
-    if split_name not in dataset:
-        raise KeyError(f"Missing {role} split '{split_name}' in dataset.")
 
 
 def load_segmentation_objects(example: dict[str, Any], **_: Any) -> dict[str, Any]:
@@ -264,39 +288,20 @@ def load_text_embedding(obj: dict[str, Any]) -> torch.Tensor:
     )
 
 
-def load_cached_feature_maps(cache_dir: str | Path) -> list[torch.Tensor]:
-    cache_path = Path(cache_dir)
-    bundle_path = cache_path / "feature_maps.pt"
-    feature_maps: Any
-    if bundle_path.exists():
-        feature_maps = torch.load(bundle_path, map_location="cpu", weights_only=False)
-        if isinstance(feature_maps, dict):
-            feature_maps = feature_maps.get("feature_maps")
-    else:
-        level_paths = sorted(cache_path.glob("level_*.pt"))
-        feature_maps = [torch.load(level_path, map_location="cpu", weights_only=False) for level_path in level_paths]
-
-    if not isinstance(feature_maps, list) or not feature_maps:
-        raise FileNotFoundError(
-            f"Could not load cached multi-scale features from {cache_path}. "
-            "Expected feature_maps.pt or level_*.pt files."
-        )
-
-    normalized: list[torch.Tensor] = []
-    for level_index, feature_map in enumerate(feature_maps):
-        if not isinstance(feature_map, torch.Tensor):
-            raise TypeError(
-                f"Expected cached feature tensor at level {level_index}, "
-                f"received {type(feature_map).__name__}."
-            )
-        if feature_map.ndim == 4 and feature_map.shape[0] == 1:
-            feature_map = feature_map.squeeze(0)
-        if feature_map.ndim != 3:
-            raise ValueError(
-                f"Expected cached feature map shaped [C,H,W], but received {tuple(feature_map.shape)}."
-            )
-        normalized.append(feature_map.float())
-    return normalized
+def load_cached_feature_maps(
+    cache_dir: str | Path,
+    *,
+    image_size: int,
+    expected_levels: int,
+    expected_channels: int,
+) -> list[torch.Tensor]:
+    bundle = load_feature_bundle(
+        cache_dir,
+        expected_levels=expected_levels,
+        expected_channels=expected_channels,
+        expected_image_size=image_size,
+    )
+    return list(bundle.feature_maps)
 
 
 def build_online_dataset(split_dataset: Dataset, args: argparse.Namespace) -> Dataset:
@@ -385,11 +390,28 @@ def collate_online_examples(batch: list[dict[str, Any]], *, image_size: int) -> 
     }
 
 
-def collate_offline_examples(batch: list[dict[str, Any]], *, image_size: int) -> dict[str, Any]:
-    feature_lists = [load_cached_feature_maps(example["cache_dir"]) for example in batch]
+def collate_offline_examples(
+    batch: list[dict[str, Any]],
+    *,
+    image_size: int,
+    expected_levels: int,
+    expected_channels: int,
+) -> dict[str, Any]:
+    feature_lists = [
+        load_cached_feature_maps(
+            example["cache_dir"],
+            image_size=image_size,
+            expected_levels=expected_levels,
+            expected_channels=expected_channels,
+        )
+        for example in batch
+    ]
     num_levels = len(feature_lists[0])
     if any(len(feature_list) != num_levels for feature_list in feature_lists):
-        raise ValueError("All cached feature examples in a batch must have the same number of levels.")
+        raise ValueError(
+            "All cached feature examples in a batch must have the same number "
+            "of levels."
+        )
 
     stacked_feature_levels = [
         torch.stack([feature_list[level_index] for feature_list in feature_lists], dim=0)
@@ -438,6 +460,8 @@ def build_dataloader(
     seed: int,
     phase: PhaseName,
     image_size: int,
+    expected_levels: int,
+    expected_channels: int,
 ) -> DataLoader:
     generator = torch.Generator()
     generator.manual_seed(seed)
@@ -445,7 +469,12 @@ def build_dataloader(
     if phase == "online":
         collate_fn = partial(collate_online_examples, image_size=image_size)
     else:
-        collate_fn = partial(collate_offline_examples, image_size=image_size)
+        collate_fn = partial(
+            collate_offline_examples,
+            image_size=image_size,
+            expected_levels=expected_levels,
+            expected_channels=expected_channels,
+        )
     return DataLoader(
         split_dataset,
         batch_size=batch_size,
@@ -480,6 +509,7 @@ def build_head(args: argparse.Namespace, device: torch.device) -> BaseFusionHead
         "mask_feature_source": args.mask_feature_source,
         "mask_head_hidden_dim": args.mask_head_hidden_dim,
         "mask_output_dim": args.mask_output_dim,
+        "mask_upsample_scales": tuple(args.mask_upsample_scales),
         "mask_convolution": args.mask_convolution,
     }
     head = BaseFusionHead(**config)
@@ -488,16 +518,9 @@ def build_head(args: argparse.Namespace, device: torch.device) -> BaseFusionHead
 
 
 def build_frozen_encoder(args: argparse.Namespace, device: torch.device) -> Detector:
-    model_name_or_path = args.detector_name_or_path
-    if model_name_or_path is None:
-        model_name_or_path = (
-            "ustc-community/dfine-medium-obj365"
-            if args.detector_architecture == "dfine"
-            else args.rtdetrv2_name_or_path
-        )
     model = load_detector(
-        args.detector_architecture,
-        model_name_or_path,
+        args.detector_name_or_path,
+        architecture=args.detector_architecture,
         device=device,
     )
     model.eval()
@@ -511,7 +534,7 @@ def extract_online_feature_maps(
     *,
     image_size: int,
 ) -> list[torch.Tensor]:
-    return extract_feature_maps(model, images, image_size=image_size)
+    return list(model.extract_feature_maps(images, image_size=image_size))
 
 
 def compute_segmentation_objective(
@@ -608,7 +631,10 @@ def compute_batch_loss(
     object_boxes.clamp_(0.0, 1.0)
 
     if "multi_image_features" in batch:
-        multi_image_features = [feature_level.to(device) for feature_level in batch["multi_image_features"]]
+        multi_image_features = [
+            feature_level.to(device)
+            for feature_level in batch["multi_image_features"]
+        ]
     else:
         if online_encoder is None:
             raise RuntimeError("Online stage requires a frozen detector encoder.")
@@ -618,7 +644,10 @@ def compute_batch_loss(
                 batch["images"],
                 image_size=image_size,
             )
-            multi_image_features = [feature_level.to(device) for feature_level in multi_image_features]
+            multi_image_features = [
+                feature_level.to(device)
+                for feature_level in multi_image_features
+            ]
 
     multi_image_features = [
         feature_level.index_select(0, object_image_indices)
@@ -649,7 +678,7 @@ def build_optimizer(model: BaseFusionHead, *, lr: float, weight_decay: float) ->
     return AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
 
 
-def save_head_checkpoint(
+def save_training_checkpoint(
     head: BaseFusionHead,
     optimizer: torch.optim.Optimizer,
     scheduler: torch.optim.lr_scheduler.LRScheduler,
@@ -661,27 +690,30 @@ def save_head_checkpoint(
 ) -> Path:
     checkpoint_dir = output_dir / f"checkpoint-{global_step:06d}"
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
-    torch.save(head.state_dict(), checkpoint_dir / "model.pt")
     architecture_config = getattr(head, "architecture_config", None)
-    if architecture_config is not None:
-        (checkpoint_dir / "head_config.json").write_text(
-            json.dumps(architecture_config, indent=2, sort_keys=True)
-        )
-    torch.save(
-        {
-            "epoch": epoch,
-            "global_step": global_step,
-            "optimizer": optimizer.state_dict(),
-            "scheduler": scheduler.state_dict(),
-            "scaler": scaler.state_dict() if scaler is not None else None,
-        },
-        checkpoint_dir / "training_state.pt",
+    if not isinstance(architecture_config, dict):
+        raise TypeError("BaseFusionHead is missing its architecture configuration.")
+    save_head_bundle(
+        checkpoint_dir,
+        config=architecture_config,
+        state_dict=head.state_dict(),
     )
-    (output_dir / "last_checkpoint").write_text(str(checkpoint_dir.resolve()))
+    save_training_state(
+        checkpoint_dir,
+        optimizer,
+        scheduler,
+        epoch=epoch,
+        global_step=global_step,
+        scaler=scaler,
+    )
+    atomic_write_text(
+        output_dir / "last_checkpoint",
+        checkpoint_dir.name + "\n",
+    )
     return checkpoint_dir
 
 
-def load_head_checkpoint(
+def load_training_checkpoint(
     head: BaseFusionHead,
     checkpoint_dir: Path,
     *,
@@ -689,11 +721,14 @@ def load_head_checkpoint(
     scheduler: torch.optim.lr_scheduler.LRScheduler,
     scaler: torch.cuda.amp.GradScaler | None,
 ) -> tuple[int, int]:
-    model_path = checkpoint_dir / "model.pt"
-    if not model_path.exists():
-        raise FileNotFoundError(f"Missing base-head checkpoint weights: {model_path}")
-    state_dict = torch.load(model_path, map_location="cpu", weights_only=False)
-    head.load_state_dict(state_dict)
+    checkpoint = load_head_bundle(checkpoint_dir / "head.pt")
+    architecture_config = getattr(head, "architecture_config", None)
+    if checkpoint.config != architecture_config:
+        raise ValueError(
+            "The resume checkpoint head configuration does not match the current "
+            "training configuration."
+        )
+    head.load_state_dict(checkpoint.state_dict)
     resume_state = load_training_state(
         checkpoint_dir,
         optimizer=optimizer,
@@ -886,11 +921,15 @@ def main() -> None:
         raise ValueError("dice_smooth must be positive.")
     if not 0.0 <= args.prompt_dropout <= 1.0:
         raise ValueError("prompt_dropout must be between zero and one.")
+    if not args.mask_upsample_scales or any(
+        scale <= 0 for scale in args.mask_upsample_scales
+    ):
+        raise ValueError("mask_upsample_scales must contain positive integers.")
     set_seed(args.seed)
 
     device = torch.device(args.device) if args.device is not None else get_device()
     log_event("device", {"device": str(device)})
-    dataset = load_segmentation_dataset(args.dataset_path)
+    dataset = dataset_from_args(args)
     ensure_split_exists(dataset, args.train_split, role="train")
     ensure_split_exists(dataset, args.validation_split, role="validation")
 
@@ -912,6 +951,8 @@ def main() -> None:
             seed=args.seed,
             phase="online",
             image_size=args.image_size,
+            expected_levels=args.num_feature_levels,
+            expected_channels=args.image_dim,
         )
         validation_loaders["online"] = build_dataloader(
             online_validation_dataset,
@@ -921,6 +962,8 @@ def main() -> None:
             seed=args.seed,
             phase="online",
             image_size=args.image_size,
+            expected_levels=args.num_feature_levels,
+            expected_channels=args.image_dim,
         )
 
     if any(phase == "offline" for phase, _ in stages):
@@ -934,6 +977,8 @@ def main() -> None:
             seed=args.seed,
             phase="offline",
             image_size=args.image_size,
+            expected_levels=args.num_feature_levels,
+            expected_channels=args.image_dim,
         )
         validation_loaders["offline"] = build_dataloader(
             offline_validation_dataset,
@@ -943,15 +988,27 @@ def main() -> None:
             seed=args.seed,
             phase="offline",
             image_size=args.image_size,
+            expected_levels=args.num_feature_levels,
+            expected_channels=args.image_dim,
         )
 
     head = build_head(args, device)
+    online_encoder = (
+        build_frozen_encoder(args, device) if "online" in train_loaders else None
+    )
     run_config_path = write_run_manifest(
         output_dir,
         args,
         model_config=cast(dict[str, Any], head.architecture_config),
         resolved={
             "device": str(device),
+            "output_dir": str(output_dir),
+            "detector_architecture": (
+                None if online_encoder is None else online_encoder.architecture
+            ),
+            "detector_name_or_path": (
+                None if online_encoder is None else online_encoder.source
+            ),
             "train_stages": [
                 {"phase": phase, "epochs": epochs} for phase, epochs in stages
             ],
@@ -967,7 +1024,7 @@ def main() -> None:
     global_step = 0
     resume_checkpoint = resolve_resume_checkpoint(args.resume_from)
     if resume_checkpoint is not None:
-        start_epoch, global_step = load_head_checkpoint(
+        start_epoch, global_step = load_training_checkpoint(
             head,
             resume_checkpoint,
             optimizer=optimizer,
@@ -982,8 +1039,6 @@ def main() -> None:
                 "global_step": global_step,
             },
         )
-
-    online_encoder = build_frozen_encoder(args, device) if "online" in train_loaders else None
 
     epoch_index = start_epoch
     for phase, phase_epochs in stages:
@@ -1036,7 +1091,7 @@ def main() -> None:
             )
 
             if (epoch_index + 1) % args.save_every_epochs == 0:
-                checkpoint_dir = save_head_checkpoint(
+                checkpoint_dir = save_training_checkpoint(
                     head,
                     optimizer,
                     scheduler,
@@ -1063,14 +1118,15 @@ def main() -> None:
             break
 
     final_dir = output_dir / "final"
-    final_dir.mkdir(parents=True, exist_ok=True)
-    torch.save(head.state_dict(), final_dir / "model.pt")
     architecture_config = getattr(head, "architecture_config", None)
-    if architecture_config is not None:
-        (final_dir / "head_config.json").write_text(
-            json.dumps(architecture_config, indent=2, sort_keys=True)
-        )
-    log_event("saved_final_model", {"path": str(final_dir / 'model.pt')})
+    if not isinstance(architecture_config, dict):
+        raise TypeError("BaseFusionHead is missing its architecture configuration.")
+    final_path = save_head_bundle(
+        final_dir,
+        config=architecture_config,
+        state_dict=head.state_dict(),
+    )
+    log_event("saved_final_model", {"path": str(final_path)})
 
 
 if __name__ == "__main__":

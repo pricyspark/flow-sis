@@ -10,9 +10,7 @@ from PIL import Image
 from scipy import ndimage
 
 from ..masks import mask2xywh
-from .common import (
-    mask_union,
-)
+from .common import mask_union
 
 from flowsis.utils.common import init_rng
 

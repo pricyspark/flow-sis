@@ -5,6 +5,7 @@ from .training import (
     load_training_state,
     resolve_resume_checkpoint,
     save_checkpoint,
+    save_training_state,
 )
 
 __all__ = [
@@ -14,6 +15,7 @@ __all__ = [
     "load_training_state",
     "resolve_resume_checkpoint",
     "save_checkpoint",
+    "save_training_state",
     "set_seed",
     "load_classes",
     "resolve_activation",

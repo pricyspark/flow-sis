@@ -10,15 +10,20 @@ from datasets import (
     ClassLabel,
     Dataset,
     DatasetDict,
-    load_dataset,
-    load_from_disk,
 )
 
 from flowsis.pretrained import (
-    DETECTOR_ARCHITECTURES,
     Detector,
     DetectorArchitecture,
+    detector_default_output_dir,
     load_detector,
+    resolve_detector,
+)
+from flowsis.cli.common import (
+    add_detector_arguments,
+    dataset_from_args,
+    ensure_split_exists,
+    log_event,
 )
 from flowsis.utils import (
     build_autocast_context,
@@ -43,27 +48,27 @@ from flowsis.data.augment import (
     photometric_augment,
     roi_square_augment,
     rotation_augment,
+    AugmentationStep,
 )
 from flowsis.cli.train.training_manifest import write_run_manifest
 
-AugmentationStep = tuple[str, Any, dict[str, Any]]
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Train a supported DETR detector on the FlowSIS detection dataset."
+        description="Train a supported detector on the FlowSIS detection dataset."
     )
-    parser.add_argument(
-        "--detector_architecture",
-        choices=DETECTOR_ARCHITECTURES,
-        default="rtdetrv2",
-    )
+    add_detector_arguments(parser)
     parser.add_argument("--dataset_path", type=str, default="data/dataset")
     parser.add_argument("--dataset_name", type=str, default=None)
     parser.add_argument("--dataset_config", type=str, default=None)
     parser.add_argument("--train_split", type=str, default="train")
     parser.add_argument("--validation_split", type=str, default="validation")
-    parser.add_argument("--output_dir", type=str, default="outputs/rtdetrv2")
-    parser.add_argument("--model_name_or_path", type=str, default=None)
+    parser.add_argument(
+        "--output_dir",
+        type=str,
+        default=None,
+        help="Defaults to the registered output directory for the selected detector.",
+    )
     parser.add_argument("--epochs", type=int, default=5)
     parser.add_argument("--batch_size", type=int, default=8)
     parser.add_argument("--lr", type=float, default=1e-4)
@@ -145,29 +150,6 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def log_event(name: str, payload: dict[str, Any]) -> None:
-    print(name, payload)
-
-
-def load_detection_dataset(args: argparse.Namespace) -> DatasetDict:
-    if args.dataset_name is not None:
-        dataset = load_dataset(args.dataset_name, args.dataset_config)
-    else:
-        dataset_path = Path(args.dataset_path)
-        if not dataset_path.exists():
-            raise FileNotFoundError(f"Dataset path does not exist: {dataset_path}")
-        dataset = load_from_disk(str(dataset_path))
-        if isinstance(dataset, Dataset):
-            raise TypeError("Dataset loaded. DatasetDict expected.")
-
-    return dataset
-
-
-def ensure_split_exists(dataset: DatasetDict, split_name: str, *, role: str) -> None:
-    if split_name not in dataset:
-        raise KeyError(f"Missing {role} split '{split_name}' in dataset.")
-
-
 def dataset_to_annotation(example: dict[str, Any]) -> dict[str, Any]:
     return {
         "image_id": int(example["image_id"]),
@@ -197,14 +179,16 @@ def load_label_metadata(
     split_name: str,
 ) -> tuple[int, dict[int, str]]:
     split_features = dataset[split_name].features
-    assert split_features is not None
+    if split_features is None:
+        raise ValueError(f"Dataset split {split_name!r} does not define a feature schema.")
     object_schema = get_object_feature_schema(split_features["objects"])
     category_feature = object_schema["category"]
     if hasattr(category_feature, "feature"):
         category_feature = category_feature.feature
     if not isinstance(category_feature, ClassLabel):
         raise TypeError(
-            "Expected dataset feature objects.category to be a datasets.ClassLabel with contiguous 0-based ids."
+            "Expected dataset feature objects.category to be a "
+            "datasets.ClassLabel with contiguous 0-based ids."
         )
 
     id2label = {
@@ -327,7 +311,8 @@ def sanity_decode_dataset(
                 image = get_image(example, convert_mode="RGB")
             except Exception as exc:
                 raise RuntimeError(
-                    f"Failed to decode dataset image for split='{split_name}' index={index} source={image_source!r}: {exc}"
+                    f"Failed to decode dataset image for split={split_name!r} "
+                    f"index={index} source={image_source!r}: {exc}"
                 ) from exc
 
             log_event(
@@ -351,18 +336,22 @@ def sanity_decode_dataset(
 def build_model(
     *,
     detector_architecture: DetectorArchitecture,
-    model_name_or_path: str,
+    model_name_or_path: str | None,
     resume_checkpoint: Path | None,
     num_labels: int,
     id2label: dict[int, str],
     device: torch.device,
 ) -> Detector:
     if resume_checkpoint is not None:
-        return load_detector(detector_architecture, str(resume_checkpoint), device=device)
+        return load_detector(
+            resume_checkpoint,
+            architecture=detector_architecture,
+            device=device,
+        )
 
     return load_detector(
-        detector_architecture,
         model_name_or_path,
+        architecture=detector_architecture,
         num_labels=num_labels,
         id2label=id2label,
         device=device,
@@ -379,15 +368,7 @@ def build_optimizer(
     if backbone_lr is None:
         return AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
 
-    backbone_parameters: list[torch.nn.Parameter] = []
-    other_parameters: list[torch.nn.Parameter] = []
-    for name, parameter in model.model.named_parameters():
-        if not parameter.requires_grad:
-            continue
-        parameter_group = (
-            backbone_parameters if "backbone" in name.split(".") else other_parameters
-        )
-        parameter_group.append(parameter)
+    backbone_parameters, other_parameters = model.split_backbone_parameters()
 
     if not backbone_parameters:
         raise ValueError(
@@ -507,7 +488,9 @@ def train_one_epoch(
         epoch_loss_sum += loss_value
         epoch_batch_count += 1
         for key, value in forward_result.loss_dict.items():
-            epoch_loss_dict_sums[key] = epoch_loss_dict_sums.get(key, 0.0) + float(value.detach().item())
+            epoch_loss_dict_sums[key] = epoch_loss_dict_sums.get(
+                key, 0.0
+            ) + float(value.detach().item())
 
         log_event(
             "train_step",
@@ -583,7 +566,11 @@ def run_inference_example(
     device: torch.device,
     detector_architecture: DetectorArchitecture,
 ) -> None:
-    model = load_detector(detector_architecture, str(checkpoint_dir), device=device)
+    model = load_detector(
+        checkpoint_dir,
+        architecture=detector_architecture,
+        device=device,
+    )
     sample = dataset[split][index]
     inference = model.infer(
         get_image(sample, convert_mode="RGB"),
@@ -596,7 +583,9 @@ def run_inference_example(
         {
             "checkpoint": str(checkpoint_dir),
             "num_detections": int(first_detection["scores"].numel()),
-            "feature_map_shapes": [tuple(feature.shape) for feature in inference.encodings],
+            "feature_map_shapes": [
+                tuple(feature.shape) for feature in inference.feature_maps
+            ],
         },
     )
 
@@ -613,7 +602,7 @@ def main() -> None:
 
     device = torch.device(args.device) if args.device is not None else get_device()
     log_event("device", {"device": str(device)})
-    dataset = load_detection_dataset(args)
+    dataset = dataset_from_args(args)
 
     if args.sanity_decode:
         sanity_decode_dataset(
@@ -626,17 +615,21 @@ def main() -> None:
     if args.validation_split not in dataset:
         log_event("validation_skip", {"missing_split": args.validation_split})
 
-    output_dir = Path(args.output_dir)
+    resume_checkpoint = resolve_resume_checkpoint(args.resume_from)
+    detector_spec, resolved_model_source = resolve_detector(
+        resume_checkpoint or args.model_name_or_path,
+        architecture=args.detector_architecture,
+    )
+    detector_architecture = detector_spec.architecture
+    output_dir = (
+        detector_default_output_dir(detector_architecture)
+        if args.output_dir is None
+        else Path(args.output_dir)
+    )
     output_dir.mkdir(parents=True, exist_ok=True)
 
     num_labels, id2label = load_label_metadata(dataset, args.train_split)
-    resume_checkpoint = resolve_resume_checkpoint(args.resume_from)
-    detector_architecture = cast(DetectorArchitecture, args.detector_architecture)
-    model_name_or_path = args.model_name_or_path or (
-        "ustc-community/dfine-medium-obj365"
-        if detector_architecture == "dfine"
-        else "PekingU/rtdetr_v2_r50vd"
-    )
+    model_name_or_path = resolved_model_source
     model = build_model(
         detector_architecture=detector_architecture,
         model_name_or_path=model_name_or_path,
@@ -648,11 +641,12 @@ def main() -> None:
     run_config_path = write_run_manifest(
         output_dir,
         args,
-        model_config=model.model.config.to_dict(),
+        model_config=model.model_config,
         resolved={
             "device": str(device),
+            "output_dir": str(output_dir),
             "detector_architecture": detector_architecture,
-            "model_name_or_path": model_name_or_path,
+            "model_name_or_path": model.source,
             "num_labels": num_labels,
             "id2label": id2label,
             "resume_checkpoint": None if resume_checkpoint is None else str(resume_checkpoint),
@@ -670,7 +664,7 @@ def main() -> None:
             loader=loader,
             augment=train_augment,
         )
-        train_dataset = cast(Dataset, train_dataset) # To calm type checker on HF Dataset and torch Dataset
+        train_dataset = cast(Dataset, train_dataset)
     else:
         train_dataset = cast(Dataset, dataset[args.train_split])
 
@@ -684,13 +678,6 @@ def main() -> None:
         },
     )
     
-    val_dataset = PreparedDataset(
-        dataset[args.validation_split],
-        loader=loader,
-        augment=build_augmentation_pipeline(build_validation_augmentation_steps(args)),
-    )
-    val_dataset = cast(Dataset, val_dataset)
-
     train_loader = build_dataloader(
         split_dataset=train_dataset,
         batch_size=args.batch_size,
@@ -702,6 +689,16 @@ def main() -> None:
     
     validation_loader = None
     if args.validation_split in dataset:
+        val_dataset = cast(
+            Dataset,
+            PreparedDataset(
+                dataset[args.validation_split],
+                loader=loader,
+                augment=build_augmentation_pipeline(
+                    build_validation_augmentation_steps(args)
+                ),
+            ),
+        )
         validation_loader = build_dataloader(
             split_dataset=val_dataset,
             batch_size=args.batch_size,
@@ -791,7 +788,10 @@ def main() -> None:
                     "epoch": epoch,
                     "global_step": global_step,
                     "loss": round(validation_loss, 6),
-                    "loss_dict": {key: round(value, 6) for key, value in validation_loss_dict.items()},
+                    "loss_dict": {
+                        key: round(value, 6)
+                        for key, value in validation_loss_dict.items()
+                    },
                 },
             )
 
@@ -845,8 +845,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-'''
-flowsis-train-rtdetrv2 --model_name_or_path outputs/rtdetrv2_good/checkpoint-double --lr 1e-5 --use_overlap_augment --epochs 100 > train_double.txt
-flowsis-train-rtdetrv2 --device cuda:1 --epochs 100
-'''

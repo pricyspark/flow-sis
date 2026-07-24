@@ -11,17 +11,17 @@ from PIL import Image, ImageDraw, ImageFont
 from flowsis.data import PreparedDataset
 from flowsis.data.images import get_image
 from flowsis.data.object_records import get_object_records
-from flowsis.cli.train.train_rtdetrv2 import (
-    AugmentationStep,
+from flowsis.data.augment import AugmentationStep
+from flowsis.cli.common import dataset_from_args
+from flowsis.cli.train.train_detector import (
     build_detection_loader,
     build_train_augmentation_steps,
     build_validation_augmentation_steps,
-    load_detection_dataset,
     load_label_metadata,
 )
 
 
-DEFAULT_OUTPUT_DIR = Path("outputs/rtdetrv2_augmentation_visualization")
+DEFAULT_OUTPUT_DIR = Path("outputs/detector-augmentation-visualization")
 MASK_ALPHA = 88
 COLORS = (
     "#ff5a5f",
@@ -365,7 +365,7 @@ def save_visualization_set(
 
 def main() -> None:
     args = parse_args()
-    dataset = load_detection_dataset(args)
+    dataset = dataset_from_args(args)
     loader = build_detection_loader()
 
     requested_pipelines = []

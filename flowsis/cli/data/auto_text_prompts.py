@@ -65,6 +65,7 @@ def main():
         print(f"Prompt generated for: {label}")
         
     label_prompts.dump(args.prompts_path)
+    label_prompts.embed_all()
     label_prompts.save_embeddings(args.embeddings_path)
         
 if __name__ == "__main__":

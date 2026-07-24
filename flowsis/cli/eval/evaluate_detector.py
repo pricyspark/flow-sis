@@ -1,4 +1,4 @@
-"""Evaluate a supported DETR checkpoint with confidence-ranked PR curves."""
+"""Evaluate a supported detector checkpoint with confidence-ranked PR curves."""
 
 import argparse
 import csv
@@ -14,21 +14,17 @@ from datasets import ClassLabel, Dataset, DatasetDict, load_from_disk
 
 from flowsis.data.images import get_image
 from flowsis.data.object_records import get_object_feature_schema, get_object_records
-from flowsis.pretrained import DETECTOR_ARCHITECTURES, load_detector
+from flowsis.cli.common import add_detector_arguments
+from flowsis.pretrained import load_detector
 from flowsis.utils import get_device
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--detector_architecture",
-        choices=DETECTOR_ARCHITECTURES,
-        default="rtdetrv2",
-    )
-    parser.add_argument("--model_path", default="outputs/rtdetrv2/final")
+    add_detector_arguments(parser)
     parser.add_argument("--dataset_path", default="data/dataset")
     parser.add_argument("--split", default="test")
-    parser.add_argument("--output_dir", default="outputs/rtdetrv2-pr-test")
+    parser.add_argument("--output_dir", default="outputs/detector-evaluation")
     parser.add_argument("--batch_size", type=int, default=8)
     parser.add_argument("--image_size", type=int, default=640)
     parser.add_argument("--iou_threshold", type=float, default=0.5)
@@ -93,15 +89,25 @@ def main() -> None:
     split = loaded[args.split]
     names = label_names(split)
     device = torch.device(args.device) if args.device else get_device()
-    architecture = args.detector_architecture
-    model = load_detector(architecture, args.model_path, device=device)
+    model = load_detector(
+        args.model_name_or_path,
+        architecture=args.detector_architecture,
+        device=device,
+    )
+    architecture = model.architecture
 
     ground_truth: dict[int, dict[int, np.ndarray]] = {}
     positives: defaultdict[int, int] = defaultdict(int)
     predictions: list[tuple[float, int, int, np.ndarray]] = []
 
     for start in range(0, len(split), args.batch_size):
-        examples = [split[index] for index in range(start, min(start + args.batch_size, len(split)))]
+        examples = [
+            split[index]
+            for index in range(
+                start,
+                min(start + args.batch_size, len(split)),
+            )
+        ]
         images = [get_image(example, convert_mode="RGB") for example in examples]
         result = model.infer(
             images,
@@ -117,19 +123,34 @@ def main() -> None:
                 boxes_by_class[label].append([x, y, x + width, y + height])
                 positives[label] += 1
             ground_truth[image_index] = {
-                label: np.asarray(boxes, dtype=np.float64) for label, boxes in boxes_by_class.items()
+                label: np.asarray(boxes, dtype=np.float64)
+                for label, boxes in boxes_by_class.items()
             }
             for score, label, box in zip(
                 detection["scores"].detach().cpu().tolist(),
                 detection["labels"].detach().cpu().tolist(),
                 detection["boxes"].detach().cpu().tolist(),
             ):
-                predictions.append((float(score), int(label), image_index, np.asarray(box, dtype=np.float64)))
-        print(f"evaluated_images {min(start + args.batch_size, len(split))}/{len(split)}", flush=True)
+                predictions.append(
+                    (
+                        float(score),
+                        int(label),
+                        image_index,
+                        np.asarray(box, dtype=np.float64),
+                    )
+                )
+        print(
+            f"evaluated_images {min(start + args.batch_size, len(split))}/{len(split)}",
+            flush=True,
+        )
 
     class_records: defaultdict[int, list[tuple[float, bool]]] = defaultdict(list)
     matched: defaultdict[tuple[int, int], set[int]] = defaultdict(set)
-    for score, label, image_index, box in sorted(predictions, reverse=True, key=lambda item: item[0]):
+    for score, label, image_index, box in sorted(
+        predictions,
+        reverse=True,
+        key=lambda item: item[0],
+    ):
         candidates = ground_truth[image_index].get(label, np.empty((0, 4), dtype=np.float64))
         ious = box_iou(box, candidates)
         is_true_positive = False
@@ -151,11 +172,16 @@ def main() -> None:
         writer = csv.writer(handle)
         writer.writerow(["class_id", "class_name", "score", "recall", "precision"])
         for label, metric in metrics.items():
-            for score, recall, precision in zip(metric["scores"], metric["recall"], metric["precision"]):
+            for score, recall, precision in zip(
+                metric["scores"],
+                metric["recall"],
+                metric["precision"],
+            ):
                 writer.writerow([label, names[label], score, recall, precision])
 
     summary = {
-        "model_path": str(args.model_path), "dataset_path": str(args.dataset_path),
+        "architecture": architecture, "model": model.source,
+        "dataset_path": str(args.dataset_path),
         "split": args.split, "num_images": len(split), "iou_threshold": args.iou_threshold,
         "score_threshold": args.score_threshold, "num_ground_truth": sum(positives.values()),
         "num_predictions": len(predictions), "micro_ap": micro["ap"],
@@ -170,8 +196,18 @@ def main() -> None:
 
     figure, axis = plt.subplots(figsize=(8, 7))
     for label, metric in metrics.items():
-        axis.plot(metric["recall"], metric["precision"], label=f"{names[label]} (AP={metric['ap']:.3f})")
-    axis.plot(micro["recall"], micro["precision"], "k--", linewidth=2, label=f"micro (AP={micro['ap']:.3f})")
+        axis.plot(
+            metric["recall"],
+            metric["precision"],
+            label=f"{names[label]} (AP={metric['ap']:.3f})",
+        )
+    axis.plot(
+        micro["recall"],
+        micro["precision"],
+        "k--",
+        linewidth=2,
+        label=f"micro (AP={micro['ap']:.3f})",
+    )
     axis.set(xlim=(0, 1), ylim=(0, 1.01), xlabel="Recall", ylabel="Precision",
              title=f"{architecture} precision-recall at IoU {args.iou_threshold:.2f}")
     axis.grid(alpha=0.25)
