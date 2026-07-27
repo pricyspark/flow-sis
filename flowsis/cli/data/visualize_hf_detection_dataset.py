@@ -17,10 +17,10 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Visualize samples from the saved HF object detection dataset."
     )
-    parser.add_argument("--dataset_path", type=Path, default=DEFAULT_DATASET_PATH)
+    parser.add_argument("--dataset-path", type=Path, default=DEFAULT_DATASET_PATH)
     parser.add_argument("--split", type=str, default="train")
-    parser.add_argument("--output_dir", type=Path, default=DEFAULT_OUTPUT_DIR)
-    parser.add_argument("--num_samples", type=int, default=16)
+    parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
+    parser.add_argument("--num-samples", type=int, default=16)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
         "--shuffle",
@@ -29,7 +29,7 @@ def parse_args() -> argparse.Namespace:
         help="Shuffle samples before selecting them.",
     )
     parser.add_argument(
-        "--cell_size",
+        "--cell-size",
         type=int,
         default=480,
         help="Longest edge used for each tile in the contact sheet.",

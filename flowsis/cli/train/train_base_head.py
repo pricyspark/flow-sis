@@ -66,30 +66,30 @@ def parse_args() -> argparse.Namespace:
             "online frozen detector features, or a staged combination of both."
         ),
     )
-    parser.add_argument("--dataset_path", type=str, default="data/segmentation-dataset")
-    parser.add_argument("--train_split", type=str, default="train")
-    parser.add_argument("--validation_split", type=str, default="validation")
-    parser.add_argument("--output_dir", type=str, default="outputs/base")
-    parser.add_argument("--resume_from", type=str, default=None)
+    parser.add_argument("--dataset-path", type=str, default="data/segmentation-dataset")
+    parser.add_argument("--train-split", type=str, default="train")
+    parser.add_argument("--validation-split", type=str, default="validation")
+    parser.add_argument("--output-dir", type=str, default="outputs/base")
+    parser.add_argument("--resume-from", type=str, default=None)
     add_detector_arguments(
         parser,
         model_flag="--detector-model",
-        model_dest="detector_name_or_path",
+        model_dest="detector_model_source",
     )
     parser.add_argument(
-        "--train_stages",
+        "--train-stages",
         type=str,
         default="online:1",
         help="Comma-separated stage plan, e.g. 'offline:8,online:2'.",
     )
-    parser.add_argument("--batch_size", type=int, default=8)
-    parser.add_argument("--num_workers", type=int, default=8)
+    parser.add_argument("--batch-size", type=int, default=8)
+    parser.add_argument("--num-workers", type=int, default=8)
     parser.add_argument("--lr", type=float, default=1e-4)
-    parser.add_argument("--weight_decay", type=float, default=1e-4)
-    parser.add_argument("--warmup_steps", type=int, default=0)
-    parser.add_argument("--max_steps", type=int, default=None)
-    parser.add_argument("--save_every_epochs", type=int, default=1)
-    parser.add_argument("--image_size", type=int, default=640)
+    parser.add_argument("--weight-decay", type=float, default=1e-4)
+    parser.add_argument("--warmup-steps", type=int, default=0)
+    parser.add_argument("--max-steps", type=int, default=None)
+    parser.add_argument("--save-every-epochs", type=int, default=1)
+    parser.add_argument("--image-size", type=int, default=640)
     parser.add_argument("--amp", action="store_true")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
@@ -99,43 +99,43 @@ def parse_args() -> argparse.Namespace:
         help="Torch device to use, e.g. 'cuda:1' or 'cpu'. Defaults to automatic selection.",
     )
     parser.add_argument(
-        "--use_rotation_augment",
+        "--use-rotation-augment",
         action=argparse.BooleanOptionalAction,
         default=True,
         help="Apply rotation augmentation during online-image stages.",
     )
     parser.add_argument(
-        "--use_roi_square_augment",
+        "--use-roi-square-augment",
         action=argparse.BooleanOptionalAction,
         default=True,
         help="Apply ROI square cropping during online-image stages.",
     )
     parser.add_argument(
-        "--use_overlap_augment",
+        "--use-overlap-augment",
         action=argparse.BooleanOptionalAction,
         default=False,
         help="Apply overlap compositing during online-image stages.",
     )
     parser.add_argument(
-        "--overlap_min_overlays",
+        "--overlap-min-overlays",
         type=int,
         default=1,
         help="Minimum number of samples to composite when overlap augmentation is enabled.",
     )
     parser.add_argument(
-        "--overlap_max_overlays",
+        "--overlap-max-overlays",
         type=int,
         default=1,
         help="Maximum number of samples to composite when overlap augmentation is enabled.",
     )
     parser.add_argument(
-        "--overlap_p",
+        "--overlap-p",
         type=float,
         default=0.5,
         help="Geometric continuation parameter used to sample additional overlap layers.",
     )
     parser.add_argument(
-        "--use_photometric_augment",
+        "--use-photometric-augment",
         action=argparse.BooleanOptionalAction,
         default=True,
         help=(
@@ -143,72 +143,72 @@ def parse_args() -> argparse.Namespace:
             "Keep this disabled if you want online behavior to match an offline cache exactly."
         ),
     )
-    parser.add_argument("--num_decode_layers", type=int, default=1)
-    parser.add_argument("--decode_embed_dim", type=int, default=128)
-    parser.add_argument("--image_dim", type=int, default=256)
-    parser.add_argument("--text_dim", type=int, default=768)
+    parser.add_argument("--num-decode-layers", type=int, default=1)
+    parser.add_argument("--decode-embed-dim", type=int, default=128)
+    parser.add_argument("--image-dim", type=int, default=256)
+    parser.add_argument("--text-dim", type=int, default=768)
     parser.add_argument("--nhead", type=int, default=8)
-    parser.add_argument("--decode_ffn_dim", type=int, default=512)
+    parser.add_argument("--decode-ffn-dim", type=int, default=512)
     parser.add_argument("--dropout", type=float, default=0.1)
     parser.add_argument("--activation", type=str, choices=("gelu", "relu"), default="gelu")
-    parser.add_argument("--num_feature_levels", type=int, default=3)
+    parser.add_argument("--num-feature-levels", type=int, default=3)
     parser.add_argument(
-        "--decode_pos_encode",
+        "--decode-pos-encode",
         choices=("none", "first", "second", "all"),
         default="first",
     )
     parser.add_argument(
-        "--image_self_attention",
+        "--image-self-attention",
         choices=("GLOBAL", "WINDOW", "none"),
         default="WINDOW",
     )
-    parser.add_argument("--decode_window_size", type=int, default=8)
+    parser.add_argument("--decode-window-size", type=int, default=8)
     parser.add_argument(
-        "--use_shifted_windows",
+        "--use-shifted-windows",
         action=argparse.BooleanOptionalAction,
         default=True,
     )
     parser.add_argument(
-        "--multiscale_merge",
+        "--multiscale-merge",
         choices=("conv", "deformable", "none"),
         default="conv",
     )
     parser.add_argument(
-        "--conv_merge_refinement",
+        "--conv-merge-refinement",
         choices=("standard", "depthwise"),
         default="depthwise",
     )
-    parser.add_argument("--deformable_num_points", type=int, default=4)
-    parser.add_argument("--deformable_offset_scale", type=float, default=2.0)
-    parser.add_argument("--aggregator_dim", type=int, default=None)
+    parser.add_argument("--deformable-num-points", type=int, default=4)
+    parser.add_argument("--deformable-offset-scale", type=float, default=2.0)
+    parser.add_argument("--aggregator-dim", type=int, default=None)
     parser.add_argument(
-        "--channel_aggregation",
+        "--channel-aggregation",
         choices=("none", "sigmoid", "softmax"),
         default="none",
     )
     parser.add_argument(
-        "--mask_feature_source",
+        "--mask-feature-source",
         choices=("merged", "highest_resolution"),
         default="merged",
     )
-    parser.add_argument("--mask_head_hidden_dim", type=int, default=None)
-    parser.add_argument("--mask_output_dim", type=int, default=1)
+    parser.add_argument("--mask-head-hidden-dim", type=int, default=None)
+    parser.add_argument("--mask-output-dim", type=int, default=1)
     parser.add_argument(
-        "--mask_upsample_scales",
+        "--mask-upsample-scales",
         type=int,
         nargs="+",
         default=(2, 2),
     )
     parser.add_argument(
-        "--mask_convolution",
+        "--mask-convolution",
         choices=("standard", "depthwise_separable"),
         default="depthwise_separable",
     )
-    parser.add_argument("--bce_loss_weight", type=float, default=1.0)
-    parser.add_argument("--dice_loss_weight", type=float, default=1.0)
-    parser.add_argument("--dice_smooth", type=float, default=1.0)
+    parser.add_argument("--bce-loss-weight", type=float, default=1.0)
+    parser.add_argument("--dice-loss-weight", type=float, default=1.0)
+    parser.add_argument("--dice-smooth", type=float, default=1.0)
     parser.add_argument(
-        "--prompt_dropout",
+        "--prompt-dropout",
         type=float,
         default=0.2,
         help="Probability of dropping each prompt vector during training; one is always kept.",
@@ -519,7 +519,7 @@ def build_head(args: argparse.Namespace, device: torch.device) -> BaseFusionHead
 
 def build_frozen_encoder(args: argparse.Namespace, device: torch.device) -> Detector:
     model = load_detector(
-        args.detector_name_or_path,
+        args.detector_model_source,
         architecture=args.detector_architecture,
         device=device,
     )
@@ -1006,7 +1006,7 @@ def main() -> None:
             "detector_architecture": (
                 None if online_encoder is None else online_encoder.architecture
             ),
-            "detector_name_or_path": (
+            "detector_model_source": (
                 None if online_encoder is None else online_encoder.source
             ),
             "train_stages": [

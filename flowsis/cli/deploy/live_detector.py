@@ -30,15 +30,20 @@ def parse_args() -> argparse.Namespace:
     )
     add_detector_arguments(parser)
     parser.add_argument(
-        "--video_source",
+        "--video-source",
         default="live",
         help="Use 'live', a camera index such as '1', or a video file path.",
     )
-    parser.add_argument("--threshold", type=float, default=0.5)
-    parser.add_argument("--image_size", type=int, default=640)
+    parser.add_argument(
+        "--confidence-threshold",
+        type=float,
+        default=0.5,
+        help="Minimum detection confidence.",
+    )
+    parser.add_argument("--image-size", type=int, default=640)
     parser.add_argument("--device", default=None)
     parser.add_argument(
-        "--cpu_preprocess",
+        "--cpu-preprocess",
         action="store_true",
         help="Use the reference CPU image processor instead of device preprocessing.",
     )
@@ -88,9 +93,9 @@ def draw_detections(
     cpu = {
         key: value.detach().cpu().tolist() for key, value in detections.items()
     }
-    for box, score, label_id in zip(
+    for box, confidence, label_id in zip(
         cpu["boxes"],
-        cpu["scores"],
+        cpu["confidences"],
         cpu["labels"],
     ):
         x1, y1, x2, y2 = [int(round(value)) for value in box]
@@ -101,7 +106,7 @@ def draw_detections(
         cv2.rectangle(rendered, (x1, y1), (x2, y2), color, thickness=2)
         draw_text_block(
             rendered,
-            text=f"{label} {float(score):.2f}",
+            text=f"{label} {float(confidence):.2f}",
             origin=(x1, text_y),
             color=color,
         )
@@ -116,11 +121,11 @@ def draw_detections(
 
 def main() -> None:
     args = parse_args()
-    if not 0.0 <= args.threshold <= 1.0:
-        raise ValueError("--threshold must be between zero and one.")
+    if not 0.0 <= args.confidence_threshold <= 1.0:
+        raise ValueError("--confidence-threshold must be between zero and one.")
     device = get_device() if args.device is None else args.device
     detector = load_detector(
-        args.model_name_or_path,
+        args.model_source,
         architecture=args.detector_architecture,
         device=device,
     )
@@ -131,7 +136,7 @@ def main() -> None:
             "architecture": detector.architecture,
             "model": detector.source,
             "video_source": args.video_source,
-            "threshold": args.threshold,
+            "confidence_threshold": args.confidence_threshold,
             "image_size": args.image_size,
             "device": str(detector.device),
             "labels": detector.label_names,
@@ -151,7 +156,7 @@ def main() -> None:
             result = detector.infer_frame(
                 frame_bgr,
                 image_size=args.image_size,
-                threshold=args.threshold,
+                threshold=args.confidence_threshold,
                 device_preprocess=not args.cpu_preprocess,
             )
             elapsed_ms = (time.perf_counter() - start) * 1000.0

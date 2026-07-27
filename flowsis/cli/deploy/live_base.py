@@ -30,34 +30,34 @@ def parse_args() -> argparse.Namespace:
     add_detector_arguments(
         parser,
         model_flag="--detector-model",
-        model_dest="detector_model",
+        model_dest="detector_model_source",
     )
-    parser.add_argument("--head_path", type=Path, default=Path("outputs/base/final"))
+    parser.add_argument("--head-path", type=Path, default=Path("outputs/base/final"))
     parser.add_argument(
-        "--text_embeddings_dir",
+        "--text-embeddings-dir",
         type=Path,
         default=Path("data/manifests/text-embeddings"),
     )
     parser.add_argument(
-        "--video_source",
+        "--video-source",
         default="live",
         help="Use 'live', a camera index such as '1', or a video file path.",
     )
-    parser.add_argument("--output_path", type=Path, default=None)
+    parser.add_argument("--output-path", type=Path, default=None)
     parser.add_argument("--device", default=None)
-    parser.add_argument("--detection_threshold", type=float, default=0.5)
-    parser.add_argument("--mask_threshold", type=float, default=0.5)
-    parser.add_argument("--mask_alpha", type=float, default=0.45)
-    parser.add_argument("--image_size", type=int, default=640)
-    parser.add_argument("--history_size", type=int, default=12)
+    parser.add_argument("--detection-threshold", type=float, default=0.5)
+    parser.add_argument("--mask-threshold", type=float, default=0.5)
+    parser.add_argument("--mask-alpha", type=float, default=0.45)
+    parser.add_argument("--image-size", type=int, default=640)
+    parser.add_argument("--history-size", type=int, default=12)
     parser.add_argument("--amp", action="store_true")
     parser.add_argument(
-        "--cpu_preprocess",
+        "--cpu-preprocess",
         action="store_true",
         help="Resize, rescale, and normalize detector inputs on CPU instead of CUDA.",
     )
-    parser.add_argument("--no_display", action="store_true")
-    parser.add_argument("--max_frames", type=int, default=None)
+    parser.add_argument("--no-display", action="store_true")
+    parser.add_argument("--max-frames", type=int, default=None)
     return parser.parse_args()
 
 
@@ -200,19 +200,19 @@ def open_writer(path: Path, *, fps: float, size: tuple[int, int]) -> cv2.VideoWr
 def main() -> None:
     args = parse_args()
     if not 0.0 <= args.detection_threshold <= 1.0:
-        raise ValueError("--detection_threshold must be between zero and one.")
+        raise ValueError("--detection-threshold must be between zero and one.")
     if not 0.0 <= args.mask_threshold <= 1.0:
-        raise ValueError("--mask_threshold must be between zero and one.")
+        raise ValueError("--mask-threshold must be between zero and one.")
     if not 0.0 <= args.mask_alpha <= 1.0:
-        raise ValueError("--mask_alpha must be between zero and one.")
+        raise ValueError("--mask-alpha must be between zero and one.")
     if args.history_size <= 0:
-        raise ValueError("--history_size must be positive.")
+        raise ValueError("--history-size must be positive.")
     if args.no_display and args.output_path is None:
-        raise ValueError("--no_display requires --output_path.")
+        raise ValueError("--no-display requires --output-path.")
 
     device = torch.device(args.device) if args.device else get_device()
     detector = load_detector(
-        args.detector_model,
+        args.detector_model_source,
         architecture=args.detector_architecture,
         device=device,
     )

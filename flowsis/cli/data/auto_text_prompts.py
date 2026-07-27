@@ -22,9 +22,9 @@ openai_key = os.environ.get("OPENAI_API_KEY")
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Use the OpenAI API to remotely generate text prompts for each label class.")
     parser.add_argument("--model", type=str, default=DEFAULT_MODEL)
-    parser.add_argument("--classes_path", type=Path, default=DEFAULT_CLASSES_PATH)
-    parser.add_argument("--prompts_path", type=Path, default=DEFAULT_PROMPTS_PATH)
-    parser.add_argument("--embeddings_path", type=Path, default=DEFAULT_EMBEDDINGS_PATH)
+    parser.add_argument("--classes-path", type=Path, default=DEFAULT_CLASSES_PATH)
+    parser.add_argument("--prompts-path", type=Path, default=DEFAULT_PROMPTS_PATH)
+    parser.add_argument("--embeddings-path", type=Path, default=DEFAULT_EMBEDDINGS_PATH)
     return parser.parse_args()
 
 

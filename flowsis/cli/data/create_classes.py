@@ -12,9 +12,14 @@ DEFAULT_COLS = ["ToolStyle", "Class"]
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Read video manifest to create class mapping.")
-    parser.add_argument("--csv_path", type=Path, default=DEFAULT_CSV_PATH)
-    parser.add_argument("--json_path", type=Path, default=DEFAULT_JSON_PATH)
-    parser.add_argument("--cols", type=list[str], default=DEFAULT_COLS)
+    parser.add_argument("--csv-path", type=Path, default=DEFAULT_CSV_PATH)
+    parser.add_argument("--json-path", type=Path, default=DEFAULT_JSON_PATH)
+    parser.add_argument(
+        "--columns",
+        nargs="+",
+        default=DEFAULT_COLS,
+        help="Manifest columns to combine into each class label.",
+    )
     return parser.parse_args()
 
 
@@ -58,7 +63,7 @@ def main():
     create_json(
         args.csv_path,
         args.json_path,
-        args.cols,
+        args.columns,
     )
     
     

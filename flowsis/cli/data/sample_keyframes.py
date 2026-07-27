@@ -55,11 +55,11 @@ class ClusterSample:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Sample keyframes from videos using pHash and agglomerative clustering.")
-    parser.add_argument("--video_dir", type=Path, default=DEFAULT_VIDEO_DIR)
-    parser.add_argument("--frame_dir", type=Path, default=DEFAULT_FRAME_DIR)
-    parser.add_argument("--manifest_dir", type=Path, default=DEFAULT_MANIFEST_DIR)
+    parser.add_argument("--video-dir", type=Path, default=DEFAULT_VIDEO_DIR)
+    parser.add_argument("--frame-dir", type=Path, default=DEFAULT_FRAME_DIR)
+    parser.add_argument("--manifest-dir", type=Path, default=DEFAULT_MANIFEST_DIR)
     parser.add_argument(
-        "--frame_manifest",
+        "--frame-manifest",
         type=Path,
         default=None,
         help="Optional existing frame manifest to resample from instead of analyzing videos.",

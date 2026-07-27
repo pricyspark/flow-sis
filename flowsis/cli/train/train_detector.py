@@ -58,38 +58,38 @@ def parse_args() -> argparse.Namespace:
         description="Train a supported detector on the FlowSIS detection dataset."
     )
     add_detector_arguments(parser)
-    parser.add_argument("--dataset_path", type=str, default="data/dataset")
-    parser.add_argument("--dataset_name", type=str, default=None)
-    parser.add_argument("--dataset_config", type=str, default=None)
-    parser.add_argument("--train_split", type=str, default="train")
-    parser.add_argument("--validation_split", type=str, default="validation")
+    parser.add_argument("--dataset-path", type=str, default="data/dataset")
+    parser.add_argument("--dataset-name", type=str, default=None)
+    parser.add_argument("--dataset-config", type=str, default=None)
+    parser.add_argument("--train-split", type=str, default="train")
+    parser.add_argument("--validation-split", type=str, default="validation")
     parser.add_argument(
-        "--output_dir",
+        "--output-dir",
         type=str,
         default=None,
         help="Defaults to the registered output directory for the selected detector.",
     )
     parser.add_argument("--epochs", type=int, default=5)
-    parser.add_argument("--batch_size", type=int, default=8)
+    parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument(
-        "--backbone_lr",
+        "--backbone-lr",
         type=float,
         default=None,
         help="Learning rate for backbone parameters. Defaults to --lr.",
     )
-    parser.add_argument("--weight_decay", type=float, default=1e-4)
-    parser.add_argument("--warmup_steps", type=int, default=0)
+    parser.add_argument("--weight-decay", type=float, default=1e-4)
+    parser.add_argument("--warmup-steps", type=int, default=0)
     parser.add_argument(
-        "--max_grad_norm",
+        "--max-grad-norm",
         type=float,
         default=None,
         help="Clip the total gradient norm to this value. Disabled by default.",
     )
-    parser.add_argument("--image_size", type=int, default=640)
-    parser.add_argument("--max_steps", type=int, default=None)
-    parser.add_argument("--save_every_epochs", type=int, default=1)
-    parser.add_argument("--num_workers", type=int, default=12)
+    parser.add_argument("--image-size", type=int, default=640)
+    parser.add_argument("--max-steps", type=int, default=None)
+    parser.add_argument("--save-every-epochs", type=int, default=1)
+    parser.add_argument("--num-workers", type=int, default=12)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
         "--device",
@@ -97,52 +97,52 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Torch device to use, e.g. 'cuda:1' or 'cpu'. Defaults to automatic selection.",
     )
-    parser.add_argument("--resume_from", type=str, default=None)
-    parser.add_argument("--overfit_single_batch", action="store_true")
+    parser.add_argument("--resume-from", type=str, default=None)
+    parser.add_argument("--overfit-single-batch", action="store_true")
     parser.add_argument("--amp", action="store_true")
-    parser.add_argument("--sanity_decode", action="store_true")
-    parser.add_argument("--run_inference_example", action="store_true")
-    parser.add_argument("--inference_split", type=str, default="validation")
-    parser.add_argument("--inference_index", type=int, default=0)
-    parser.add_argument("--score_threshold", type=float, default=0.1)
+    parser.add_argument("--sanity-decode", action="store_true")
+    parser.add_argument("--run-inference-example", action="store_true")
+    parser.add_argument("--inference-split", type=str, default="validation")
+    parser.add_argument("--inference-index", type=int, default=0)
+    parser.add_argument("--score-threshold", type=float, default=0.1)
     parser.add_argument(
-        "--use_rotation_augment",
+        "--use-rotation-augment",
         action=argparse.BooleanOptionalAction,
         default=True,
         help="Apply mask-guided rotation augmentation during training.",
     )
     parser.add_argument(
-        "--use_roi_square_augment",
+        "--use-roi-square-augment",
         action=argparse.BooleanOptionalAction,
         default=True,
         help="Apply object-centered square cropping during training.",
     )
     parser.add_argument(
-        "--use_overlap_augment",
+        "--use-overlap-augment",
         action=argparse.BooleanOptionalAction,
         default=False,
         help="Apply overlap compositing during training.",
     )
     parser.add_argument(
-        "--overlap_min_overlays",
+        "--overlap-min-overlays",
         type=int,
         default=1,
         help="Minimum number of samples to composite when overlap augmentation is enabled.",
     )
     parser.add_argument(
-        "--overlap_max_overlays",
+        "--overlap-max-overlays",
         type=int,
         default=1,
         help="Maximum number of samples to composite when overlap augmentation is enabled.",
     )
     parser.add_argument(
-        "--overlap_p",
+        "--overlap-p",
         type=float,
         default=0.1,
         help="Geometric continuation parameter used to sample additional overlap layers.",
     )
     parser.add_argument(
-        "--use_photometric_augment",
+        "--use-photometric-augment",
         action=argparse.BooleanOptionalAction,
         default=True,
         help="Apply photometric augmentation during training.",
@@ -336,7 +336,7 @@ def sanity_decode_dataset(
 def build_model(
     *,
     detector_architecture: DetectorArchitecture,
-    model_name_or_path: str | None,
+    model_source: str | None,
     resume_checkpoint: Path | None,
     num_labels: int,
     id2label: dict[int, str],
@@ -350,7 +350,7 @@ def build_model(
         )
 
     return load_detector(
-        model_name_or_path,
+        model_source,
         architecture=detector_architecture,
         num_labels=num_labels,
         id2label=id2label,
@@ -372,7 +372,7 @@ def build_optimizer(
 
     if not backbone_parameters:
         raise ValueError(
-            "--backbone_lr was set, but the model has no parameters in a module "
+            "--backbone-lr was set, but the model has no parameters in a module "
             "named 'backbone'."
         )
     if not other_parameters:
@@ -595,9 +595,9 @@ def main() -> None:
     if args.lr <= 0:
         raise ValueError("--lr must be positive.")
     if args.backbone_lr is not None and args.backbone_lr <= 0:
-        raise ValueError("--backbone_lr must be positive.")
+        raise ValueError("--backbone-lr must be positive.")
     if args.max_grad_norm is not None and args.max_grad_norm <= 0:
-        raise ValueError("--max_grad_norm must be positive.")
+        raise ValueError("--max-grad-norm must be positive.")
     set_seed(args.seed)
 
     device = torch.device(args.device) if args.device is not None else get_device()
@@ -617,7 +617,7 @@ def main() -> None:
 
     resume_checkpoint = resolve_resume_checkpoint(args.resume_from)
     detector_spec, resolved_model_source = resolve_detector(
-        resume_checkpoint or args.model_name_or_path,
+        resume_checkpoint or args.model_source,
         architecture=args.detector_architecture,
     )
     detector_architecture = detector_spec.architecture
@@ -629,10 +629,9 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     num_labels, id2label = load_label_metadata(dataset, args.train_split)
-    model_name_or_path = resolved_model_source
     model = build_model(
         detector_architecture=detector_architecture,
-        model_name_or_path=model_name_or_path,
+        model_source=resolved_model_source,
         resume_checkpoint=resume_checkpoint,
         num_labels=num_labels,
         id2label=id2label,
@@ -646,7 +645,7 @@ def main() -> None:
             "device": str(device),
             "output_dir": str(output_dir),
             "detector_architecture": detector_architecture,
-            "model_name_or_path": model.source,
+            "model_source": model.source,
             "num_labels": num_labels,
             "id2label": id2label,
             "resume_checkpoint": None if resume_checkpoint is None else str(resume_checkpoint),

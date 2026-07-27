@@ -12,18 +12,21 @@ def parse_args() -> argparse.Namespace:
         description="Cache one pooled SigLIP2 embedding for each stored text prompt."
     )
     parser.add_argument(
-        "--prompts_path",
+        "--prompts-path",
         type=Path,
         default=Path("data/manifests/manual_text_prompts.json"),
     )
     parser.add_argument(
-        "--output_dir",
+        "--output-dir",
         type=Path,
         default=Path("data/manifests/text-embeddings"),
     )
     parser.add_argument(
-        "--model_name_or_path",
+        "--model",
+        dest="model_source",
         default="google/siglip2-base-patch16-224",
+        metavar="MODEL",
+        help="Hugging Face Hub model ID or local model path.",
     )
     parser.add_argument("--device", default=None)
     return parser.parse_args()
@@ -34,7 +37,7 @@ def main() -> None:
     device = torch.device(args.device) if args.device is not None else get_device()
     label_prompts = LabelPrompts.load(
         args.prompts_path,
-        model_name_or_path=args.model_name_or_path,
+        model_name_or_path=args.model_source,
         device=device,
     )
     embeddings = label_prompts.embed_all()

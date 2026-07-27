@@ -12,9 +12,9 @@ DEFAULT_EMBEDDINGS_PATH = Path("data/manifests/text-embeddings")
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Manually enter text prompts for each label class.")
-    parser.add_argument("--classes_path", type=Path, default=DEFAULT_CLASSES_PATH)
-    parser.add_argument("--prompts_path", type=Path, default=DEFAULT_PROMPTS_PATH)
-    parser.add_argument("--embeddings_path", type=Path, default=DEFAULT_EMBEDDINGS_PATH)
+    parser.add_argument("--classes-path", type=Path, default=DEFAULT_CLASSES_PATH)
+    parser.add_argument("--prompts-path", type=Path, default=DEFAULT_PROMPTS_PATH)
+    parser.add_argument("--embeddings-path", type=Path, default=DEFAULT_EMBEDDINGS_PATH)
     return parser.parse_args()
 
 

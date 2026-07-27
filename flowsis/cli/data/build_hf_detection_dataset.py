@@ -19,10 +19,10 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description = "Build the Hugging Face detection dataset used by FlowSIS.",
     )
-    parser.add_argument("--manifest_path", type=Path, default=DEFAULT_MANIFEST_PATH)
-    parser.add_argument("--boxes_dir", type=Path, default=DEFAULT_BOXES_DIR)
-    parser.add_argument("--classes_path", type=Path, default=DEFAULT_CLASSES_PATH)
-    parser.add_argument("--output_path", type=Path, default=DEFAULT_OUTPUT_PATH)
+    parser.add_argument("--manifest-path", type=Path, default=DEFAULT_MANIFEST_PATH)
+    parser.add_argument("--boxes-dir", type=Path, default=DEFAULT_BOXES_DIR)
+    parser.add_argument("--classes-path", type=Path, default=DEFAULT_CLASSES_PATH)
+    parser.add_argument("--output-path", type=Path, default=DEFAULT_OUTPUT_PATH)
     return parser.parse_args()
 
 

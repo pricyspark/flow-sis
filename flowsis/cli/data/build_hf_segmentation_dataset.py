@@ -21,12 +21,12 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Build the Hugging Face segmentation dataset used by FlowSIS.",
     )
-    parser.add_argument("--manifest_path", type=Path, default=DEFAULT_MANIFEST_PATH)
-    parser.add_argument("--masks_dir", type=Path, default=DEFAULT_MASKS_DIR)
-    parser.add_argument("--classes_path", type=Path, default=DEFAULT_CLASSES_PATH)
-    parser.add_argument("--text_embeddings_dir", type=Path, default=DEFAULT_TEXT_EMBEDDINGS_DIR)
+    parser.add_argument("--manifest-path", type=Path, default=DEFAULT_MANIFEST_PATH)
+    parser.add_argument("--masks-dir", type=Path, default=DEFAULT_MASKS_DIR)
+    parser.add_argument("--classes-path", type=Path, default=DEFAULT_CLASSES_PATH)
+    parser.add_argument("--text-embeddings-dir", type=Path, default=DEFAULT_TEXT_EMBEDDINGS_DIR)
     parser.add_argument(
-        "--feature_cache_dir",
+        "--feature-cache-dir",
         type=Path,
         default=DEFAULT_FEATURE_CACHE_DIR,
         help=(
@@ -35,10 +35,10 @@ def parse_args() -> argparse.Namespace:
             "but does not require the directory to exist yet."
         ),
     )
-    parser.add_argument("--output_path", type=Path, default=DEFAULT_OUTPUT_PATH)
-    parser.add_argument("--train_size", type=float, default=0.8)
-    parser.add_argument("--validation_size", type=float, default=0.1)
-    parser.add_argument("--test_size", type=float, default=0.1)
+    parser.add_argument("--output-path", type=Path, default=DEFAULT_OUTPUT_PATH)
+    parser.add_argument("--train-size", type=float, default=0.8)
+    parser.add_argument("--validation-size", type=float, default=0.1)
+    parser.add_argument("--test-size", type=float, default=0.1)
     return parser.parse_args()
 
 

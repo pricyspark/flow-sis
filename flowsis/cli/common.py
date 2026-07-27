@@ -14,7 +14,7 @@ def add_detector_arguments(
     parser: argparse.ArgumentParser,
     *,
     model_flag: str = "--model",
-    model_dest: str = "model_name_or_path",
+    model_dest: str = "model_source",
 ) -> None:
     parser.add_argument(
         "--detector",
@@ -30,7 +30,8 @@ def add_detector_arguments(
         model_flag,
         dest=model_dest,
         default=None,
-        help="Checkpoint path or Hugging Face model id.",
+        metavar="MODEL",
+        help="Hugging Face Hub model ID or local model path.",
     )
 
 

@@ -42,20 +42,20 @@ def parse_args() -> argparse.Namespace:
             "loaded, intermediate, and final stages."
         )
     )
-    parser.add_argument("--dataset_path", type=str, default="data/dataset")
-    parser.add_argument("--dataset_name", type=str, default=None)
-    parser.add_argument("--dataset_config", type=str, default=None)
-    parser.add_argument("--train_split", type=str, default="train")
-    parser.add_argument("--validation_split", type=str, default="validation")
-    parser.add_argument("--output_dir", type=Path, default=DEFAULT_OUTPUT_DIR)
+    parser.add_argument("--dataset-path", type=str, default="data/dataset")
+    parser.add_argument("--dataset-name", type=str, default=None)
+    parser.add_argument("--dataset-config", type=str, default=None)
+    parser.add_argument("--train-split", type=str, default="train")
+    parser.add_argument("--validation-split", type=str, default="validation")
+    parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument(
         "--pipeline",
         choices=("train", "validation", "both"),
         default="both",
         help="Which augmentation pipeline to visualize.",
     )
-    parser.add_argument("--image_size", type=int, default=640)
-    parser.add_argument("--num_samples", type=int, default=4)
+    parser.add_argument("--image-size", type=int, default=640)
+    parser.add_argument("--num-samples", type=int, default=4)
     parser.add_argument("--indices", type=int, nargs="*", default=None)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
@@ -65,13 +65,13 @@ def parse_args() -> argparse.Namespace:
         help="Shuffle indices before selecting samples when --indices is not provided.",
     )
     parser.add_argument(
-        "--tile_size",
+        "--tile-size",
         type=int,
         default=480,
         help="Longest edge used for each stage tile in the saved strips.",
     )
     parser.add_argument(
-        "--save_stage_images",
+        "--save-stage-images",
         action=argparse.BooleanOptionalAction,
         default=True,
         help="Save each intermediate stage image in addition to the combined strip.",
@@ -83,43 +83,43 @@ def parse_args() -> argparse.Namespace:
         help="Pass a per-sample RNG through the pipeline so repeated runs are reproducible.",
     )
     parser.add_argument(
-        "--use_rotation_augment",
+        "--use-rotation-augment",
         action=argparse.BooleanOptionalAction,
         default=True,
         help="Apply mask-guided rotation augmentation during training visualization.",
     )
     parser.add_argument(
-        "--use_roi_square_augment",
+        "--use-roi-square-augment",
         action=argparse.BooleanOptionalAction,
         default=True,
         help="Apply object-centered square cropping during training visualization.",
     )
     parser.add_argument(
-        "--use_overlap_augment",
+        "--use-overlap-augment",
         action=argparse.BooleanOptionalAction,
         default=False,
         help="Apply overlap compositing during training visualization.",
     )
     parser.add_argument(
-        "--overlap_min_overlays",
+        "--overlap-min-overlays",
         type=int,
         default=1,
         help="Minimum number of samples to composite when overlap augmentation is enabled.",
     )
     parser.add_argument(
-        "--overlap_max_overlays",
+        "--overlap-max-overlays",
         type=int,
         default=1,
         help="Maximum number of samples to composite when overlap augmentation is enabled.",
     )
     parser.add_argument(
-        "--overlap_p",
+        "--overlap-p",
         type=float,
         default=0.5,
         help="Geometric continuation parameter used to sample additional overlap layers.",
     )
     parser.add_argument(
-        "--use_photometric_augment",
+        "--use-photometric-augment",
         action=argparse.BooleanOptionalAction,
         default=False,
         help="Apply photometric augmentation during training visualization.",
