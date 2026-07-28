@@ -1,4 +1,4 @@
-"""Evaluate a supported detector checkpoint with confidence-ranked PR curves."""
+"""Evaluate a supported detector checkpoint with score-ranked PR curves."""
 
 import argparse
 import csv
@@ -28,7 +28,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--image-size", type=int, default=640)
     parser.add_argument("--iou-threshold", type=float, default=0.5)
-    parser.add_argument("--confidence-threshold", type=float, default=0.0)
+    parser.add_argument("--score-threshold", type=float, default=0.0)
     parser.add_argument("--device", default=None)
     return parser.parse_args()
 
@@ -46,7 +46,7 @@ def box_iou(box: np.ndarray, boxes: np.ndarray) -> np.ndarray:
 
 def precision_recall(records: list[tuple[float, bool]], positives: int) -> dict[str, Any]:
     records.sort(key=lambda record: record[0], reverse=True)
-    confidences = np.asarray([record[0] for record in records], dtype=np.float64)
+    scores = np.asarray([record[0] for record in records], dtype=np.float64)
     true_positive = np.asarray([record[1] for record in records], dtype=np.float64)
     tp = np.cumsum(true_positive)
     fp = np.cumsum(1.0 - true_positive)
@@ -62,7 +62,7 @@ def precision_recall(records: list[tuple[float, bool]], positives: int) -> dict[
         (padded_recall[changes + 1] - padded_recall[changes])
         * padded_precision[changes + 1]
     ))
-    return {"confidences": confidences, "precision": precision, "recall": recall, "ap": ap}
+    return {"scores": scores, "precision": precision, "recall": recall, "ap": ap}
 
 
 def label_names(split: Dataset) -> dict[int, str]:
@@ -112,7 +112,7 @@ def main() -> None:
         result = model.infer(
             images,
             image_size=args.image_size,
-            threshold=args.confidence_threshold,
+            threshold=args.score_threshold,
         )
         for offset, (example, detection) in enumerate(zip(examples, result.detections)):
             image_index = start + offset
@@ -126,14 +126,14 @@ def main() -> None:
                 label: np.asarray(boxes, dtype=np.float64)
                 for label, boxes in boxes_by_class.items()
             }
-            for confidence, label, box in zip(
-                detection["confidences"].detach().cpu().tolist(),
+            for score, label, box in zip(
+                detection["scores"].detach().cpu().tolist(),
                 detection["labels"].detach().cpu().tolist(),
                 detection["boxes"].detach().cpu().tolist(),
             ):
                 predictions.append(
                     (
-                        float(confidence),
+                        float(score),
                         int(label),
                         image_index,
                         np.asarray(box, dtype=np.float64),
@@ -146,7 +146,7 @@ def main() -> None:
 
     class_records: defaultdict[int, list[tuple[float, bool]]] = defaultdict(list)
     matched: defaultdict[tuple[int, int], set[int]] = defaultdict(set)
-    for confidence, label, image_index, box in sorted(
+    for score, label, image_index, box in sorted(
         predictions,
         reverse=True,
         key=lambda item: item[0],
@@ -160,7 +160,7 @@ def main() -> None:
             if ious[candidate_index] >= args.iou_threshold and candidate_index not in matched[key]:
                 matched[key].add(candidate_index)
                 is_true_positive = True
-        class_records[label].append((confidence, is_true_positive))
+        class_records[label].append((score, is_true_positive))
 
     metrics: dict[int, dict[str, Any]] = {}
     for label in sorted(names):
@@ -170,20 +170,20 @@ def main() -> None:
 
     with (output_dir / "pr_curve.csv").open("w", newline="") as handle:
         writer = csv.writer(handle)
-        writer.writerow(["class_id", "class_name", "confidence", "recall", "precision"])
+        writer.writerow(["class_id", "class_name", "score", "recall", "precision"])
         for label, metric in metrics.items():
-            for confidence, recall, precision in zip(
-                metric["confidences"],
+            for score, recall, precision in zip(
+                metric["scores"],
                 metric["recall"],
                 metric["precision"],
             ):
-                writer.writerow([label, names[label], confidence, recall, precision])
+                writer.writerow([label, names[label], score, recall, precision])
 
     summary = {
         "architecture": architecture, "model": model.source,
         "dataset_path": str(args.dataset_path),
         "split": args.split, "num_images": len(split), "iou_threshold": args.iou_threshold,
-        "confidence_threshold": args.confidence_threshold, "num_ground_truth": sum(positives.values()),
+        "score_threshold": args.score_threshold, "num_ground_truth": sum(positives.values()),
         "num_predictions": len(predictions), "micro_ap": micro["ap"],
         "macro_ap": float(np.mean([metric["ap"] for metric in metrics.values()])),
         "classes": {
