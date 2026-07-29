@@ -3,7 +3,7 @@ from pathlib import Path
 
 import torch
 
-from flowsis.data.prompts import LabelPrompts
+from flowsis.data import LabelPrompts
 from flowsis.utils import get_device
 
 

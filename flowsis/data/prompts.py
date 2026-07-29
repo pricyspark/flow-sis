@@ -82,6 +82,25 @@ class LabelPrompts:
             label_prompts.prompts[label] = prompt_list
 
         return label_prompts
+    
+    @staticmethod
+    def load_embeddings(
+        label: str,
+        directory: Path,
+        cache: dict[str, torch.Tensor],
+        *,
+        device: torch.device,
+    ) -> torch.Tensor:
+        if label not in cache:
+            path = directory / f"{label}.pt"
+            if not path.exists():
+                raise FileNotFoundError(f"Missing prompt embeddings for detector label {label!r}: {path}")
+            embeddings = torch.load(path, map_location="cpu", weights_only=False)
+            if not isinstance(embeddings, torch.Tensor) or embeddings.ndim != 2:
+                shape = getattr(embeddings, "shape", None)
+                raise ValueError(f"Expected prompt embeddings shaped [P,D] at {path}, got {shape}.")
+            cache[label] = embeddings.float().to(device)
+        return cache[label]
 
     def embed_all(self) -> dict[str, torch.Tensor]:
         """Create one normalized, pooled semantic vector per prompt."""

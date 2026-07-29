@@ -18,6 +18,7 @@ from flowsis.head_checkpoint import load_head_checkpoint, resolve_head_checkpoin
 from flowsis.pretrained import load_detector
 from flowsis.selection import SelectionResult, select_first_detection, select_recurrent_detection
 from flowsis.utils import build_autocast_context, get_device
+from flowsis.data import LabelPrompts
 
 
 WINDOW_NAME = "FlowSIS Live Inference"
@@ -72,25 +73,6 @@ def load_head(
     head.load_state_dict(checkpoint.state_dict)
     head.eval()
     return head, checkpoint_path
-
-
-def load_prompt_embeddings(
-    label: str,
-    directory: Path,
-    cache: dict[str, torch.Tensor],
-    *,
-    device: torch.device,
-) -> torch.Tensor:
-    if label not in cache:
-        path = directory / f"{label}.pt"
-        if not path.exists():
-            raise FileNotFoundError(f"Missing prompt embeddings for detector label {label!r}: {path}")
-        embeddings = torch.load(path, map_location="cpu", weights_only=False)
-        if not isinstance(embeddings, torch.Tensor) or embeddings.ndim != 2:
-            shape = getattr(embeddings, "shape", None)
-            raise ValueError(f"Expected prompt embeddings shaped [P,D] at {path}, got {shape}.")
-        cache[label] = embeddings.float().to(device)
-    return cache[label]
 
 
 def select_detection(
@@ -267,7 +249,7 @@ def main() -> None:
             selected_label: str | None = None
             if selection is not None:
                 selected_label = id2label.get(selection.label, f"class_{selection.label}")
-                text_embeddings = load_prompt_embeddings(
+                text_embeddings = LabelPrompts.load_embeddings(
                     selected_label,
                     args.text_embeddings_dir,
                     prompt_cache,

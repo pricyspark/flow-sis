@@ -6,6 +6,7 @@ from .features import (
     save_feature_bundle,
 )
 from .loaders import load_object_image, load_object_masks
+from .prompts import LabelPrompts
 
 __all__ = [
     "CallablePipeline",
@@ -16,4 +17,5 @@ __all__ = [
     "load_object_image",
     "load_object_masks",
     "save_feature_bundle",
+    "LabelPrompts",
 ]
