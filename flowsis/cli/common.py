@@ -73,3 +73,13 @@ def ensure_split_exists(
 
 def log_event(name: str, payload: dict[str, Any]) -> None:
     print(name, json.dumps(payload, sort_keys=True, default=str), flush=True)
+
+
+def append_log_event(
+    path: Path,
+    name: str,
+    payload: dict[str, Any],
+) -> None:
+    record = {"event": name, **payload}
+    with path.open("a", encoding="utf-8") as file:
+        file.write(json.dumps(record, sort_keys=True, default=str) + "\n")

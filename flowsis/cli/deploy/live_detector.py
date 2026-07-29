@@ -127,6 +127,7 @@ def main() -> None:
     detector = load_detector(
         args.model_source,
         architecture=args.detector_architecture,
+        image_size=args.image_size,
         device=device,
     )
     detector.eval()
@@ -155,7 +156,6 @@ def main() -> None:
             start = time.perf_counter()
             result = detector.infer_frame(
                 frame_bgr,
-                image_size=args.image_size,
                 threshold=args.score_threshold,
                 device_preprocess=not args.cpu_preprocess,
             )

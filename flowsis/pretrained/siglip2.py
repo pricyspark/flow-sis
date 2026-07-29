@@ -53,13 +53,10 @@ class SigLIP2(nn.Module):
         max_length: int = 64,
         return_mode: Literal["tokens", "pooled"] = "tokens",
         normalize: bool = False,
-        output_hidden_states: bool = False,
-        output_attentions: bool = False,
         device: str | torch.device | None = None,
     ) -> SigLIP2:
         resolved_source, local_files_only = resolve_pretrained_source(
-            model_name_or_path, 
-            cache_dir,
+            model_name_or_path
         )
         
         # The SigLIP2 checkpoint's text_config still identifies itself as
@@ -70,9 +67,6 @@ class SigLIP2(nn.Module):
             cache_dir=cache_dir,
             local_files_only=local_files_only,
         )
-        
-        config.output_hidden_states = output_hidden_states
-        config.output_attentions = output_attentions
         
         tokenizer = Siglip2Tokenizer.from_pretrained(
             resolved_source,
@@ -100,9 +94,7 @@ class SigLIP2(nn.Module):
     def forward(
         self,
         texts: str | Sequence[str],
-        *,
-        return_outputs: bool = False,
-    ) -> torch.Tensor | tuple[torch.Tensor, object]: # not sure object or Any
+    ) -> torch.Tensor:
         single_input = isinstance(texts, str)
         batch = [texts] if single_input else list(texts)
         
@@ -144,7 +136,4 @@ class SigLIP2(nn.Module):
         if single_input:
             embeddings = embeddings[0]
             
-        if return_outputs:
-            return embeddings, outputs
-        
         return embeddings

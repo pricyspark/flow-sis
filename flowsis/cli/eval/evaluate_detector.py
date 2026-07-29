@@ -92,6 +92,7 @@ def main() -> None:
     model = load_detector(
         args.model_source,
         architecture=args.detector_architecture,
+        image_size=args.image_size,
         device=device,
     )
     architecture = model.architecture
@@ -111,7 +112,6 @@ def main() -> None:
         images = [get_image(example, convert_mode="RGB") for example in examples]
         result = model.infer(
             images,
-            image_size=args.image_size,
             threshold=args.score_threshold,
         )
         for offset, (example, detection) in enumerate(zip(examples, result.detections)):

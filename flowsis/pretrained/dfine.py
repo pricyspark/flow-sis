@@ -15,13 +15,11 @@ class DFineDetector(BaseDetector):
     def preprocess_bgr_frame(
         self,
         frame_bgr: NDArray,
-        *,
-        image_size: int,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         return preprocess_detr_bgr_frame(
             self._processor,
             frame_bgr,
-            image_size=image_size,
+            image_size=self.image_size,
             device=self.device,
         )
 
@@ -36,6 +34,7 @@ class DFineDetector(BaseDetector):
         num_labels: int | None = None,
         id2label: dict[int, str] | None = None,
         label2id: dict[str, int] | None = None,
+        image_size: int = 640,
         device: str | torch.device | None = None,
     ) -> DFineDetector:
         config = DFineConfig.from_pretrained(
@@ -70,5 +69,6 @@ class DFineDetector(BaseDetector):
             processor,
             model,
             source=source or model_name_or_path,
+            image_size=image_size,
             device=device,
         )

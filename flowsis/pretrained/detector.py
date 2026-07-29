@@ -76,14 +76,12 @@ DETECTOR_ARCHITECTURES: tuple[DetectorArchitecture, ...] = tuple(DETECTOR_SPECS)
 class DetectorForwardResult:
     loss: torch.Tensor | None
     loss_dict: dict[str, torch.Tensor]
-    outputs: ModelOutput | None = None
 
 
 @dataclass
 class DetectorInferenceResult:
     detections: list[Detection]
     feature_maps: tuple[torch.Tensor, ...]
-    flat_features: dict[str, Any] | None = None
 
 
 class Detector(Protocol):
@@ -92,6 +90,9 @@ class Detector(Protocol):
 
     @property
     def device(self) -> torch.device: ...
+
+    @property
+    def image_size(self) -> int: ...
 
     @property
     def label_names(self) -> dict[int, str]: ...
@@ -103,25 +104,19 @@ class Detector(Protocol):
         self,
         images: DetectorImages,
         annotations: Iterable[dict[str, Any]] | None = None,
-        *,
-        image_size: int | None = None,
-        return_outputs: bool = False,
     ) -> DetectorForwardResult: ...
 
     def infer(
         self,
         images: DetectorImages,
         *,
-        image_size: int | None = None,
         threshold: float = 0.1,
-        flatten_outputs: bool = False,
     ) -> DetectorInferenceResult: ...
 
     def infer_frame(
         self,
         frame_bgr: NDArray,
         *,
-        image_size: int,
         threshold: float = 0.1,
         device_preprocess: bool = True,
     ) -> DetectorInferenceResult: ...
@@ -129,8 +124,6 @@ class Detector(Protocol):
     def extract_feature_maps(
         self,
         images: DetectorImages,
-        *,
-        image_size: int,
     ) -> tuple[torch.Tensor, ...]: ...
 
     def split_backbone_parameters(
@@ -161,6 +154,7 @@ class BaseDetector(nn.Module):
         num_labels: int | None = None,
         id2label: dict[int, str] | None = None,
         label2id: dict[str, int] | None = None,
+        image_size: int = 640,
         device: str | torch.device | None = None,
     ) -> BaseDetector:
         raise NotImplementedError
@@ -171,12 +165,16 @@ class BaseDetector(nn.Module):
         model: nn.Module,
         *,
         source: str,
+        image_size: int = 640,
         device: str | torch.device | None = None,
     ) -> None:
         super().__init__()
+        if image_size <= 0:
+            raise ValueError("image_size must be positive.")
         self._processor = processor
         self._model = model
         self.source = source
+        self._configured_image_size = image_size
         self._validate_model_type()
         if device is not None:
             self.to(device)
@@ -184,6 +182,10 @@ class BaseDetector(nn.Module):
     @property
     def device(self) -> torch.device:
         return next(self._model.parameters()).device
+
+    @property
+    def image_size(self) -> int:
+        return self._configured_image_size
 
     @property
     def label_names(self) -> dict[int, str]:
@@ -222,7 +224,7 @@ class BaseDetector(nn.Module):
         return list(images)
 
     @staticmethod
-    def _image_size(image: DetectorImage) -> tuple[int, int]:
+    def _original_image_size(image: DetectorImage) -> tuple[int, int]:
         if isinstance(image, Image.Image):
             width, height = image.size
             return height, width
@@ -266,17 +268,20 @@ class BaseDetector(nn.Module):
         self,
         images: DetectorImages,
         annotations: Iterable[dict[str, Any]] | None = None,
-        *,
-        image_size: int | None = 640,
     ) -> BatchFeature:
         image_list = self._image_list(images)
-        processor_kwargs: dict[str, Any] = {"return_tensors": "pt"}
-        if image_size is not None:
-            processor_kwargs.update(
-                size={"shortest_edge": image_size, "longest_edge": image_size},
-                do_pad=True,
-                pad_size={"height": image_size, "width": image_size},
-            )
+        processor_kwargs: dict[str, Any] = {
+            "return_tensors": "pt",
+            "size": {
+                "shortest_edge": self.image_size,
+                "longest_edge": self.image_size,
+            },
+            "do_pad": True,
+            "pad_size": {
+                "height": self.image_size,
+                "width": self.image_size,
+            },
+        }
 
         image_input = cast(ImageInput, image_list)
         if annotations is None:
@@ -329,38 +334,15 @@ class BaseDetector(nn.Module):
             )
         return maps
 
-    @staticmethod
-    def _flatten_feature_maps(
-        feature_maps: tuple[torch.Tensor, ...],
-    ) -> dict[str, Any]:
-        patch_tokens = torch.cat(
-            [feature.flatten(2).transpose(1, 2) for feature in feature_maps],
-            dim=1,
-        )
-        return {
-            "patch_tokens": patch_tokens,
-            "image_embedding": patch_tokens.mean(dim=1),
-            "feature_map_shapes": [
-                (int(feature.shape[-2]), int(feature.shape[-1]))
-                for feature in feature_maps
-            ],
-        }
-
     def forward(
         self,
         images: DetectorImages,
         annotations: Iterable[dict[str, Any]] | None = None,
-        *,
-        image_size: int | None = None,
-        return_outputs: bool = False,
     ) -> DetectorForwardResult:
-        outputs = self._forward_model(
-            self.preprocess(images, annotations, image_size=image_size)
-        )
+        outputs = self._forward_model(self.preprocess(images, annotations))
         return DetectorForwardResult(
             loss=getattr(outputs, "loss", None),
             loss_dict=dict(getattr(outputs, "loss_dict", None) or {}),
-            outputs=outputs if return_outputs else None,
         )
 
     def _postprocess(
@@ -369,7 +351,6 @@ class BaseDetector(nn.Module):
         *,
         original_sizes: list[tuple[int, int]],
         threshold: float,
-        flatten_outputs: bool,
     ) -> DetectorInferenceResult:
         logits = getattr(outputs, "logits", None)
         if not isinstance(logits, torch.Tensor):
@@ -388,9 +369,6 @@ class BaseDetector(nn.Module):
         return DetectorInferenceResult(
             detections=detections,
             feature_maps=feature_maps,
-            flat_features=(
-                self._flatten_feature_maps(feature_maps) if flatten_outputs else None
-            ),
         )
 
     @torch.inference_mode()
@@ -398,24 +376,23 @@ class BaseDetector(nn.Module):
         self,
         images: DetectorImages,
         *,
-        image_size: int | None = None,
         threshold: float = 0.1,
-        flatten_outputs: bool = False,
     ) -> DetectorInferenceResult:
         was_training = self.training
         self.eval()
         try:
             image_list = self._image_list(images)
-            batch = self.preprocess(image_list, image_size=image_size)
+            batch = self.preprocess(image_list)
             outputs = self._inference_model(
                 batch["pixel_values"],
                 batch.get("pixel_mask"),
             )
             return self._postprocess(
                 outputs,
-                original_sizes=[self._image_size(image) for image in image_list],
+                original_sizes=[
+                    self._original_image_size(image) for image in image_list
+                ],
                 threshold=threshold,
-                flatten_outputs=flatten_outputs,
             )
         finally:
             self.train(was_training)
@@ -428,7 +405,6 @@ class BaseDetector(nn.Module):
         original_sizes: list[tuple[int, int]],
         threshold: float = 0.1,
         pixel_mask: torch.Tensor | None = None,
-        flatten_outputs: bool = False,
     ) -> DetectorInferenceResult:
         if pixel_values.ndim != 4:
             raise ValueError(
@@ -447,7 +423,6 @@ class BaseDetector(nn.Module):
                 outputs,
                 original_sizes=original_sizes,
                 threshold=threshold,
-                flatten_outputs=flatten_outputs,
             )
         finally:
             self.train(was_training)
@@ -455,8 +430,6 @@ class BaseDetector(nn.Module):
     def preprocess_bgr_frame(
         self,
         frame_bgr: NDArray,
-        *,
-        image_size: int,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         raise NotImplementedError(
             f"{self.architecture} does not provide device-side frame preprocessing."
@@ -466,7 +439,6 @@ class BaseDetector(nn.Module):
         self,
         frame_bgr: NDArray,
         *,
-        image_size: int,
         threshold: float = 0.1,
         device_preprocess: bool = True,
     ) -> DetectorInferenceResult:
@@ -474,10 +446,9 @@ class BaseDetector(nn.Module):
         if not device_preprocess:
             return self.infer(
                 frame_bgr[..., ::-1].copy(),
-                image_size=image_size,
                 threshold=threshold,
             )
-        pixels, mask = self.preprocess_bgr_frame(frame_bgr, image_size=image_size)
+        pixels, mask = self.preprocess_bgr_frame(frame_bgr)
         return self.infer_preprocessed(
             pixels,
             pixel_mask=mask,
@@ -489,10 +460,8 @@ class BaseDetector(nn.Module):
     def extract_feature_maps(
         self,
         images: DetectorImages,
-        *,
-        image_size: int,
     ) -> tuple[torch.Tensor, ...]:
-        batch = self.preprocess(images, image_size=image_size)
+        batch = self.preprocess(images)
         outputs = self._inference_model(
             batch["pixel_values"],
             batch.get("pixel_mask"),
@@ -520,6 +489,7 @@ class BaseDetector(nn.Module):
             "format_version": DETECTOR_METADATA_VERSION,
             "architecture": self.architecture,
             "source": self.source,
+            "image_size": self.image_size,
             "model_type": self.model_config.get("model_type"),
         }
         atomic_write_text(
@@ -643,6 +613,7 @@ def load_detector(
     num_labels: int | None = None,
     id2label: dict[int, str] | None = None,
     label2id: dict[str, int] | None = None,
+    image_size: int | None = None,
     device: str | torch.device | None = None,
 ) -> Detector:
     spec, source = resolve_detector(
@@ -651,6 +622,13 @@ def load_detector(
         cache_dir=cache_dir,
     )
     resolved_source, local_files_only = resolve_pretrained_source(source)
+    if image_size is None:
+        metadata_path = Path(source) / DETECTOR_METADATA_FILE
+        if metadata_path.exists():
+            metadata = json.loads(metadata_path.read_text())
+            image_size = int(metadata.get("image_size", 640))
+        else:
+            image_size = 640
     return spec.adapter_type().from_pretrained(
         resolved_source,
         source=source,
@@ -659,5 +637,6 @@ def load_detector(
         num_labels=num_labels,
         id2label=id2label,
         label2id=label2id,
+        image_size=image_size,
         device=device,
     )

@@ -40,6 +40,7 @@ from flowsis.pretrained import (
 )
 from flowsis.cli.common import (
     add_detector_arguments,
+    append_log_event,
     dataset_from_args,
     ensure_split_exists,
     log_event,
@@ -89,6 +90,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--warmup-steps", type=int, default=0)
     parser.add_argument("--max-steps", type=int, default=None)
     parser.add_argument("--save-every-epochs", type=int, default=1)
+    parser.add_argument(
+        "--save-logs",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Save epoch-level events to OUTPUT_DIR/training_log.jsonl.",
+    )
     parser.add_argument("--image-size", type=int, default=640)
     parser.add_argument("--amp", action="store_true")
     parser.add_argument("--seed", type=int, default=42)
@@ -521,6 +528,7 @@ def build_frozen_encoder(args: argparse.Namespace, device: torch.device) -> Dete
     model = load_detector(
         args.detector_model_source,
         architecture=args.detector_architecture,
+        image_size=args.image_size,
         device=device,
     )
     model.eval()
@@ -531,10 +539,8 @@ def build_frozen_encoder(args: argparse.Namespace, device: torch.device) -> Dete
 def extract_online_feature_maps(
     model: Detector,
     images: Iterable[Image.Image],
-    *,
-    image_size: int,
 ) -> list[torch.Tensor]:
-    return list(model.extract_feature_maps(images, image_size=image_size))
+    return list(model.extract_feature_maps(images))
 
 
 def compute_segmentation_objective(
@@ -603,7 +609,6 @@ def compute_batch_loss(
     *,
     device: torch.device,
     online_encoder: Detector | None,
-    image_size: int,
     use_amp: bool,
     bce_weight: float,
     dice_weight: float,
@@ -642,7 +647,6 @@ def compute_batch_loss(
             multi_image_features = extract_online_feature_maps(
                 online_encoder,
                 batch["images"],
-                image_size=image_size,
             )
             multi_image_features = [
                 feature_level.to(device)
@@ -775,7 +779,6 @@ def train_one_epoch(
     global_step: int,
     max_steps: int | None,
     device: torch.device,
-    image_size: int,
     online_encoder: Detector | None,
     use_amp: bool,
     scaler: torch.cuda.amp.GradScaler | None,
@@ -802,7 +805,6 @@ def train_one_epoch(
             batch,
             device=device,
             online_encoder=online_encoder,
-            image_size=image_size,
             use_amp=use_amp,
             bce_weight=bce_weight,
             dice_weight=dice_weight,
@@ -861,16 +863,15 @@ def evaluate(
     head: BaseFusionHead,
     data_loader: DataLoader,
     *,
+    epoch: int,
     phase: PhaseName,
     device: torch.device,
-    image_size: int,
     online_encoder: Detector | None,
     use_amp: bool,
     bce_weight: float,
     dice_weight: float,
     dice_smooth: float,
-    prompt_dropout: float,
-) -> float:
+) -> dict[str, Any]:
     head.eval()
     total_loss = 0.0
     batch_count = 0
@@ -882,12 +883,11 @@ def evaluate(
             batch,
             device=device,
             online_encoder=online_encoder,
-            image_size=image_size,
             use_amp=use_amp,
             bce_weight=bce_weight,
             dice_weight=dice_weight,
             dice_smooth=dice_smooth,
-            prompt_dropout=prompt_dropout,
+            prompt_dropout=0.0,
         )
         loss = batch_result["loss"]
         total_loss += float(loss.item())
@@ -900,15 +900,14 @@ def evaluate(
         name: round(total / max(batch_count, 1), 6)
         for name, total in metric_totals.items()
     }
-    log_event(
-        "validation_epoch",
-        {
-            "phase": phase,
-            "loss": round(average_loss, 6),
-            **metrics,
-        },
-    )
-    return average_loss
+    summary = {
+        "epoch": epoch,
+        "phase": phase,
+        "loss": round(average_loss, 6),
+        **metrics,
+    }
+    log_event("validation_epoch", summary)
+    return summary
 
 
 def main() -> None:
@@ -935,6 +934,9 @@ def main() -> None:
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    training_log_path = (
+        output_dir / "training_log.jsonl" if args.save_logs else None
+    )
 
     stages = parse_stage_spec(args.train_stages)
     train_loaders: dict[PhaseName, DataLoader] = {}
@@ -1065,7 +1067,6 @@ def main() -> None:
                 global_step=global_step,
                 max_steps=args.max_steps,
                 device=device,
-                image_size=args.image_size,
                 online_encoder=online_encoder if phase == "online" else None,
                 use_amp=args.amp,
                 scaler=scaler,
@@ -1075,20 +1076,27 @@ def main() -> None:
                 prompt_dropout=args.prompt_dropout,
             )
             log_event("train_epoch", epoch_summary)
+            if training_log_path is not None:
+                append_log_event(training_log_path, "train_epoch", epoch_summary)
 
-            evaluate(
+            validation_summary = evaluate(
                 head,
                 validation_loader,
+                epoch=epoch_index,
                 phase=phase,
                 device=device,
-                image_size=args.image_size,
                 online_encoder=online_encoder if phase == "online" else None,
                 use_amp=args.amp,
                 bce_weight=args.bce_loss_weight,
                 dice_weight=args.dice_loss_weight,
                 dice_smooth=args.dice_smooth,
-                prompt_dropout=0.0,
             )
+            if training_log_path is not None:
+                append_log_event(
+                    training_log_path,
+                    "validation_epoch",
+                    validation_summary,
+                )
 
             if (epoch_index + 1) % args.save_every_epochs == 0:
                 checkpoint_dir = save_training_checkpoint(

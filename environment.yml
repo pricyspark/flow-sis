@@ -28,6 +28,7 @@ dependencies:
   - lightning
   - timm
   - pypng
+  - pytest
   - pip:
     - kernels==0.14.1
     - kaleido

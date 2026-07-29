@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -57,6 +58,9 @@ class FakeModel(nn.Module):
             ],
         )
 
+    def save_pretrained(self, output_dir: Path) -> None:
+        (output_dir / "model.txt").write_text("fake\n")
+
 
 class FakeProcessor:
     do_rescale = True
@@ -105,17 +109,21 @@ class FakeProcessor:
             for _ in target_sizes
         ]
 
+    def save_pretrained(self, output_dir: Path) -> None:
+        (output_dir / "processor.txt").write_text("fake\n")
+
 
 class FakeDetector(BaseDetector):
     architecture = "rtdetrv2"
     expected_model_types = ("rt_detr_v2",)
 
 
-def build_detector() -> FakeDetector:
+def build_detector(*, image_size: int = 8) -> FakeDetector:
     return FakeDetector(
         FakeProcessor(),
         FakeModel(),
         source="fake",
+        image_size=image_size,
     )
 
 
@@ -127,20 +135,42 @@ def test_backend_adapters_are_siblings() -> None:
 
 def test_single_tensor_is_one_image() -> None:
     detector = build_detector()
-    detector.preprocess(torch.zeros(3, 8, 8), image_size=8)
+    detector.preprocess(torch.zeros(3, 8, 8))
     assert detector._processor.batch_size == 1
 
 
 def test_inference_contract_and_training_mode_restoration() -> None:
     detector = build_detector()
     detector.train()
-    result = detector.infer(np.zeros((8, 8, 3), dtype=np.uint8), image_size=8)
+    result = detector.infer(np.zeros((8, 8, 3), dtype=np.uint8))
     assert detector.training
     assert len(result.detections) == 1
     assert [tuple(feature.shape) for feature in result.feature_maps] == [
         (1, 4, 2, 2),
         (1, 4, 1, 1),
     ]
+
+
+def test_detector_image_size_is_instance_configuration() -> None:
+    detector = build_detector(image_size=24)
+
+    batch = detector.preprocess(torch.zeros(3, 8, 8))
+
+    assert detector.image_size == 24
+    assert batch["pixel_values"].shape[-2:] == (24, 24)
+
+
+def test_detector_rejects_invalid_image_size() -> None:
+    with pytest.raises(ValueError, match="image_size must be positive"):
+        build_detector(image_size=0)
+
+
+def test_detector_checkpoint_records_image_size(tmp_path: Path) -> None:
+    build_detector(image_size=24).save_pretrained(tmp_path)
+
+    metadata = json.loads((tmp_path / "flowsis_detector.json").read_text())
+
+    assert metadata["image_size"] == 24
 
 
 def test_backbone_parameter_split_is_complete() -> None:
