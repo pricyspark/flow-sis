@@ -61,8 +61,8 @@ def _confidence_stability(scores: Sequence[float]) -> float:
     if len(scores) == 1:
         return 1.0
 
-    score_tensor = torch.tensor(scores, dtype=torch.float32)
-    spread = float(score_tensor.std(unbiased=False).item())
+    mean = sum(scores) / len(scores)
+    spread = (sum((score - mean) ** 2 for score in scores) / len(scores)) ** 0.5
     return max(0.0, 1.0 - spread)
 
 

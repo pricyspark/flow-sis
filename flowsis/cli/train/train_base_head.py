@@ -38,6 +38,7 @@ from flowsis.pretrained import (
     Detector,
     load_detector,
 )
+from flowsis.pretrained.image_processing import image_to_rgb_tensor
 from flowsis.cli.common import (
     add_detector_arguments,
     append_log_event,
@@ -253,6 +254,8 @@ def load_segmentation_objects(example: dict[str, Any], **_: Any) -> dict[str, An
 def resize_mask_tensor(mask: torch.Tensor, *, image_size: int) -> torch.Tensor:
     if mask.ndim != 2:
         raise ValueError(f"Expected 2D mask tensor, but received shape {tuple(mask.shape)}.")
+    if mask.shape == (image_size, image_size):
+        return mask
     resized = F.interpolate(
         mask.unsqueeze(0).unsqueeze(0),
         size=(image_size, image_size),
@@ -362,7 +365,15 @@ def build_validation_dataset(split_dataset: Dataset, args: argparse.Namespace) -
 
 
 def collate_online_examples(batch: list[dict[str, Any]], *, image_size: int) -> dict[str, Any]:
-    images = [get_image(example, convert_mode="RGB") for example in batch]
+    image_tensors = [
+        image_to_rgb_tensor(get_image(example, convert_mode="RGB"))
+        for example in batch
+    ]
+    images: torch.Tensor | list[torch.Tensor]
+    if all(image.shape == image_tensors[0].shape for image in image_tensors):
+        images = torch.stack(image_tensors)
+    else:
+        images = image_tensors
     object_records = [
         (image_index, example, obj)
         for image_index, example in enumerate(batch)
@@ -469,6 +480,7 @@ def build_dataloader(
     image_size: int,
     expected_levels: int,
     expected_channels: int,
+    pin_memory: bool,
 ) -> DataLoader:
     generator = torch.Generator()
     generator.manual_seed(seed)
@@ -489,6 +501,8 @@ def build_dataloader(
         num_workers=num_workers,
         collate_fn=collate_fn,
         generator=generator,
+        pin_memory=pin_memory,
+        persistent_workers=num_workers > 0,
     )
 
 
@@ -538,9 +552,9 @@ def build_frozen_encoder(args: argparse.Namespace, device: torch.device) -> Dete
 
 def extract_online_feature_maps(
     model: Detector,
-    images: Iterable[Image.Image],
+    images: Any,
 ) -> list[torch.Tensor]:
-    return list(model.extract_feature_maps(images))
+    return list(model.extract_feature_maps(images, device_preprocess=True))
 
 
 def compute_segmentation_objective(
@@ -556,8 +570,8 @@ def compute_segmentation_objective(
         if object_image_indices is None:
             return values.mean()
         num_images = int(object_image_indices.max().item()) + 1
-        totals = torch.zeros(num_images, device=values.device, dtype=values.dtype)
-        counts = torch.zeros(num_images, device=values.device, dtype=values.dtype)
+        totals = values.new_zeros(num_images)
+        counts = values.new_zeros(num_images)
         totals.scatter_add_(0, object_image_indices, values)
         counts.scatter_add_(0, object_image_indices, torch.ones_like(values))
         return (totals / counts.clamp_min(1.0))[counts > 0].mean()
@@ -607,7 +621,6 @@ def compute_batch_loss(
     head: BaseFusionHead,
     batch: dict[str, Any],
     *,
-    device: torch.device,
     online_encoder: Detector | None,
     use_amp: bool,
     bce_weight: float,
@@ -615,29 +628,30 @@ def compute_batch_loss(
     dice_smooth: float,
     prompt_dropout: float,
 ) -> dict[str, torch.Tensor]:
-    text_embeddings = batch["text_embeddings"].to(device)
+    device = next(head.parameters()).device
+    text_embeddings = batch["text_embeddings"].to(device, non_blocking=True)
     text_padding_mask = None
     if head.training and prompt_dropout > 0.0 and text_embeddings.ndim == 3:
         text_padding_mask = torch.rand(
-            text_embeddings.shape[:2], device=device
+            text_embeddings.shape[:2], device=text_embeddings.device
         ) < prompt_dropout
         all_dropped = text_padding_mask.all(dim=1)
         if all_dropped.any():
             keep_indices = torch.randint(
                 text_embeddings.shape[1],
                 (int(all_dropped.sum().item()),),
-                device=device,
+                device=text_embeddings.device,
             )
             text_padding_mask[all_dropped, keep_indices] = False
-    target_masks = batch["target_masks"].to(device)
+    target_masks = batch["target_masks"].to(device, non_blocking=True)
     mask_output_size = target_masks.shape[-2:]
-    object_image_indices = batch["object_image_indices"].to(device)
-    object_boxes = batch["object_boxes"].to(device)
+    object_image_indices = batch["object_image_indices"].to(device, non_blocking=True)
+    object_boxes = batch["object_boxes"].to(device, non_blocking=True)
     object_boxes.clamp_(0.0, 1.0)
 
     if "multi_image_features" in batch:
         multi_image_features = [
-            feature_level.to(device)
+            feature_level.to(device, non_blocking=True)
             for feature_level in batch["multi_image_features"]
         ]
     else:
@@ -649,7 +663,7 @@ def compute_batch_loss(
                 batch["images"],
             )
             multi_image_features = [
-                feature_level.to(device)
+                feature_level.to(device, non_blocking=True)
                 for feature_level in multi_image_features
             ]
 
@@ -778,7 +792,6 @@ def train_one_epoch(
     phase: PhaseName,
     global_step: int,
     max_steps: int | None,
-    device: torch.device,
     online_encoder: Detector | None,
     use_amp: bool,
     scaler: torch.cuda.amp.GradScaler | None,
@@ -803,7 +816,6 @@ def train_one_epoch(
         batch_result = compute_batch_loss(
             head,
             batch,
-            device=device,
             online_encoder=online_encoder,
             use_amp=use_amp,
             bce_weight=bce_weight,
@@ -865,7 +877,6 @@ def evaluate(
     *,
     epoch: int,
     phase: PhaseName,
-    device: torch.device,
     online_encoder: Detector | None,
     use_amp: bool,
     bce_weight: float,
@@ -881,7 +892,6 @@ def evaluate(
         batch_result = compute_batch_loss(
             head,
             batch,
-            device=device,
             online_encoder=online_encoder,
             use_amp=use_amp,
             bce_weight=bce_weight,
@@ -955,6 +965,7 @@ def main() -> None:
             image_size=args.image_size,
             expected_levels=args.num_feature_levels,
             expected_channels=args.image_dim,
+            pin_memory=device.type == "cuda",
         )
         validation_loaders["online"] = build_dataloader(
             online_validation_dataset,
@@ -966,6 +977,7 @@ def main() -> None:
             image_size=args.image_size,
             expected_levels=args.num_feature_levels,
             expected_channels=args.image_dim,
+            pin_memory=device.type == "cuda",
         )
 
     if any(phase == "offline" for phase, _ in stages):
@@ -981,6 +993,7 @@ def main() -> None:
             image_size=args.image_size,
             expected_levels=args.num_feature_levels,
             expected_channels=args.image_dim,
+            pin_memory=device.type == "cuda",
         )
         validation_loaders["offline"] = build_dataloader(
             offline_validation_dataset,
@@ -992,6 +1005,7 @@ def main() -> None:
             image_size=args.image_size,
             expected_levels=args.num_feature_levels,
             expected_channels=args.image_dim,
+            pin_memory=device.type == "cuda",
         )
 
     head = build_head(args, device)
@@ -1066,7 +1080,6 @@ def main() -> None:
                 phase=phase,
                 global_step=global_step,
                 max_steps=args.max_steps,
-                device=device,
                 online_encoder=online_encoder if phase == "online" else None,
                 use_amp=args.amp,
                 scaler=scaler,
@@ -1084,7 +1097,6 @@ def main() -> None:
                 validation_loader,
                 epoch=epoch_index,
                 phase=phase,
-                device=device,
                 online_encoder=online_encoder if phase == "online" else None,
                 use_amp=args.amp,
                 bce_weight=args.bce_loss_weight,

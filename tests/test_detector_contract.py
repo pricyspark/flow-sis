@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import warnings
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -9,6 +10,7 @@ import numpy as np
 import pytest
 import torch
 import torch.nn as nn
+from PIL import Image
 from transformers.feature_extraction_utils import BatchFeature
 from transformers import RTDetrImageProcessor
 
@@ -18,7 +20,11 @@ from flowsis.pretrained import (
 )
 from flowsis.pretrained.dfine import DFineDetector
 from flowsis.pretrained.rtdetrv2 import RTDetrV2Detector
-from flowsis.pretrained.image_processing import preprocess_detr_bgr_frame
+from flowsis.pretrained.image_processing import (
+    image_to_rgb_tensor,
+    preprocess_detr_bgr_frame,
+    preprocess_detr_images,
+)
 
 
 class FakeConfig:
@@ -219,3 +225,66 @@ def test_device_preprocessing_matches_reference_processor_for_square_frame() -> 
         atol=float(processor.rescale_factor) + 1e-7,
         rtol=0.0,
     )
+
+
+def test_pil_conversion_returns_writable_tensor_without_warning() -> None:
+    image = Image.fromarray(np.zeros((8, 8, 3), dtype=np.uint8))
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        tensor = image_to_rgb_tensor(image)
+
+    tensor[0, 0, 0] = 1
+    assert not caught
+
+
+def test_device_batch_preprocessing_matches_reference_images_and_labels() -> None:
+    processor = RTDetrImageProcessor()
+    image = np.random.default_rng(11).integers(
+        0,
+        256,
+        size=(31, 47, 3),
+        dtype=np.uint8,
+    )
+    annotations = [
+        {
+            "image_id": 9,
+            "annotations": [
+                {
+                    "bbox": [4.0, 5.0, 12.0, 10.0],
+                    "category_id": 2,
+                    "area": 120.0,
+                    "iscrowd": 0,
+                }
+            ],
+        }
+    ]
+    reference = processor.preprocess(
+        images=[image],
+        annotations=annotations,
+        return_tensors="pt",
+        size={"shortest_edge": 24, "longest_edge": 24},
+        do_pad=True,
+        pad_size={"height": 24, "width": 24},
+    )
+
+    pixels, mask, labels = preprocess_detr_images(
+        processor,
+        torch.from_numpy(image).permute(2, 0, 1).unsqueeze(0),
+        image_size=24,
+        device=torch.device("cpu"),
+        annotations=annotations,
+    )
+
+    assert labels is not None
+    assert torch.equal(mask, reference["pixel_mask"])
+    assert torch.allclose(
+        pixels,
+        reference["pixel_values"],
+        atol=float(processor.rescale_factor) + 1e-7,
+        rtol=0.0,
+    )
+    for key in ("size", "image_id", "class_labels", "iscrowd", "orig_size"):
+        assert torch.equal(labels[0][key], reference["labels"][0][key])
+    for key in ("boxes", "area"):
+        assert torch.allclose(labels[0][key], reference["labels"][0][key])

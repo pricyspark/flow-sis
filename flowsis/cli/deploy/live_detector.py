@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from typing import Any
 
 import cv2
+import torch
 
 from flowsis.cli.common import add_detector_arguments, log_event
 from flowsis.cli.deploy.common import center_square, resolve_video_source
@@ -123,7 +124,7 @@ def main() -> None:
     args = parse_args()
     if not 0.0 <= args.score_threshold <= 1.0:
         raise ValueError("--score-threshold must be between zero and one.")
-    device = get_device() if args.device is None else args.device
+    device = get_device() if args.device is None else torch.device(args.device)
     detector = load_detector(
         args.model_source,
         architecture=args.detector_architecture,

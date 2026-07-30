@@ -19,6 +19,7 @@ from flowsis.pretrained import (
     load_detector,
     resolve_detector,
 )
+from flowsis.pretrained.image_processing import image_to_rgb_tensor
 from flowsis.cli.common import (
     add_detector_arguments,
     append_log_event,
@@ -173,8 +174,17 @@ def dataset_to_annotation(example: dict[str, Any]) -> dict[str, Any]:
 
 
 def collate_examples(batch: list[dict[str, Any]]) -> dict[str, Any]:
+    image_tensors = [
+        image_to_rgb_tensor(get_image(example, convert_mode="RGB"))
+        for example in batch
+    ]
+    images: torch.Tensor | list[torch.Tensor]
+    if all(image.shape == image_tensors[0].shape for image in image_tensors):
+        images = torch.stack(image_tensors)
+    else:
+        images = image_tensors
     return {
-        "images": [get_image(example, convert_mode="RGB") for example in batch],
+        "images": images,
         "annotations": [dataset_to_annotation(example) for example in batch],
         "image_ids": [int(example["image_id"]) for example in batch],
         "orig_sizes": [(int(example["height"]), int(example["width"])) for example in batch],
@@ -212,13 +222,12 @@ def build_dataloader(
     num_workers: int,
     shuffle: bool,
     seed: int,
-    device: torch.device,
+    pin_memory: bool,
 ) -> DataLoader:
     generator = torch.Generator()
     generator.manual_seed(seed)
 
     shuffle_batches = shuffle
-    pin_memory = device.type == "cuda"
     persistent_workers = num_workers > 0
     return DataLoader(
         split_dataset,
@@ -436,7 +445,6 @@ def train_one_epoch(
     global_step: int,
     max_steps: int | None,
     overfit_single_batch: bool,
-    device: torch.device,
     use_amp: bool,
     scaler: torch.cuda.amp.GradScaler | None,
     max_grad_norm: float | None,
@@ -461,10 +469,11 @@ def train_one_epoch(
         if max_steps is not None and global_step >= max_steps:
             break
 
-        with build_autocast_context(enabled=use_amp, device=device):
+        with build_autocast_context(enabled=use_amp, device=model.device):
             forward_result = model(
                 batch["images"],
                 batch["annotations"],
+                device_preprocess=True,
             )
             if forward_result.loss is None:
                 raise RuntimeError("Training forward did not return a loss.")
@@ -542,7 +551,6 @@ def evaluate(
     model: Detector,
     data_loader: DataLoader,
     *,
-    device: torch.device,
     use_amp: bool,
 ) -> tuple[float, dict[str, float]]:
     model.eval()
@@ -552,10 +560,11 @@ def evaluate(
 
     with torch.no_grad():
         for batch in data_loader:
-            with build_autocast_context(enabled=use_amp, device=device):
+            with build_autocast_context(enabled=use_amp, device=model.device):
                 forward_result = model(
                     batch["images"],
                     batch["annotations"],
+                    device_preprocess=True,
                 )
             if forward_result.loss is None:
                 continue
@@ -595,6 +604,7 @@ def run_inference_example(
     inference = model.infer(
         get_image(sample, convert_mode="RGB"),
         threshold=threshold,
+        device_preprocess=True,
     )
     first_detection = inference.detections[0]
     log_event(
@@ -706,7 +716,7 @@ def main() -> None:
         num_workers=args.num_workers,
         shuffle=not args.overfit_single_batch,
         seed=args.seed,
-        device=device,
+        pin_memory=device.type == "cuda",
     )
     
     validation_loader = None
@@ -727,7 +737,7 @@ def main() -> None:
             num_workers=args.num_workers,
             shuffle=False,
             seed=args.seed,
-            device=device,
+            pin_memory=device.type == "cuda",
         )
 
     total_steps = estimate_total_steps(
@@ -783,7 +793,6 @@ def main() -> None:
             global_step=global_step,
             max_steps=args.max_steps,
             overfit_single_batch=args.overfit_single_batch,
-            device=device,
             use_amp=args.amp,
             scaler=scaler,
             max_grad_norm=args.max_grad_norm,
@@ -801,7 +810,6 @@ def main() -> None:
             validation_loss, validation_loss_dict = evaluate(
                 model,
                 validation_loader,
-                device=device,
                 use_amp=args.amp,
             )
             validation_summary = {

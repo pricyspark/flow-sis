@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import torch
-from numpy.typing import NDArray
 from transformers import (
     RTDetrImageProcessor,
     RTDetrV2Config,
@@ -9,23 +8,11 @@ from transformers import (
 )
 
 from .detector import BaseDetector
-from .image_processing import preprocess_detr_bgr_frame
 
 
 class RTDetrV2Detector(BaseDetector):
     architecture = "rtdetrv2"
     expected_model_types = ("rt_detr_v2",)
-
-    def preprocess_bgr_frame(
-        self,
-        frame_bgr: NDArray,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        return preprocess_detr_bgr_frame(
-            self._processor,
-            frame_bgr,
-            image_size=self.image_size,
-            device=self.device,
-        )
 
     @classmethod
     def from_pretrained(

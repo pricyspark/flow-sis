@@ -1,27 +1,14 @@
 from __future__ import annotations
 
 import torch
-from numpy.typing import NDArray
 from transformers import AutoImageProcessor, DFineConfig, DFineForObjectDetection
 
 from .detector import BaseDetector
-from .image_processing import preprocess_detr_bgr_frame
 
 
 class DFineDetector(BaseDetector):
     architecture = "dfine"
     expected_model_types = ("d_fine",)
-
-    def preprocess_bgr_frame(
-        self,
-        frame_bgr: NDArray,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        return preprocess_detr_bgr_frame(
-            self._processor,
-            frame_bgr,
-            image_size=self.image_size,
-            device=self.device,
-        )
 
     @classmethod
     def from_pretrained(

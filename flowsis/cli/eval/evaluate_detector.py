@@ -113,6 +113,7 @@ def main() -> None:
         result = model.infer(
             images,
             threshold=args.score_threshold,
+            device_preprocess=True,
         )
         for offset, (example, detection) in enumerate(zip(examples, result.detections)):
             image_index = start + offset

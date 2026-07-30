@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
+from flowsis.base_head import BaseFusionHead
 
 import torch
 
@@ -98,3 +99,18 @@ def resolve_head_checkpoint(path: str | Path) -> Path:
         if candidate.exists():
             return candidate
     raise FileNotFoundError(f"Could not find {HEAD_CHECKPOINT_FILE} under {path}.")
+
+
+def load_head(
+    path: str | Path,
+    *,
+    device: torch.device | str = "cpu",
+) -> tuple[BaseFusionHead, Path]:
+    checkpoint_path = resolve_head_checkpoint(path)
+    checkpoint = load_head_checkpoint(checkpoint_path, map_location="cpu")
+
+    head = BaseFusionHead(**checkpoint.config)
+    head.load_state_dict(checkpoint.state_dict)
+    head.to(device)
+
+    return head, checkpoint_path

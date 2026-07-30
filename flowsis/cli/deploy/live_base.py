@@ -14,7 +14,7 @@ import torch
 from flowsis.base_head import BaseFusionHead
 from flowsis.cli.common import add_detector_arguments
 from flowsis.cli.deploy.common import center_square, resolve_video_source
-from flowsis.head_checkpoint import load_head_checkpoint, resolve_head_checkpoint
+from flowsis.head_checkpoint import load_head
 from flowsis.pretrained import load_detector
 from flowsis.selection import SelectionResult, select_first_detection, select_recurrent_detection
 from flowsis.utils import build_autocast_context, get_device
@@ -62,19 +62,6 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def load_head(
-    head_path: Path,
-    *,
-    device: torch.device,
-) -> tuple[BaseFusionHead, Path]:
-    checkpoint_path = resolve_head_checkpoint(head_path)
-    checkpoint = load_head_checkpoint(checkpoint_path)
-    head = BaseFusionHead(**checkpoint.config).to(device)
-    head.load_state_dict(checkpoint.state_dict)
-    head.eval()
-    return head, checkpoint_path
-
-
 def select_detection(
     history: deque[Mapping[str, Any]],
     previous: SelectionResult | None,
@@ -86,11 +73,16 @@ def select_detection(
     return select_recurrent_detection(history, previous)
 
 
-def normalized_box(selection: SelectionResult, *, width: int, height: int) -> torch.Tensor:
+def normalized_box(
+    selection: SelectionResult,
+    *,
+    width: int,
+    height: int,
+    reference: torch.Tensor,
+) -> torch.Tensor:
     x1, y1, x2, y2 = selection.box
-    return torch.tensor(
+    return reference.new_tensor(
         [[x1 / width, y1 / height, x2 / width, y2 / height]],
-        dtype=torch.float32,
     ).clamp_(0.0, 1.0)
 
 
@@ -102,15 +94,15 @@ def predict_mask(
     box: torch.Tensor,
     *,
     output_size: tuple[int, int],
-    device: torch.device,
     use_amp: bool,
     mask_threshold: float,
 ) -> np.ndarray:
+    device = next(head.parameters()).device
     with build_autocast_context(enabled=use_amp, device=device):
         output = head(
             feature_maps,
             text_embeddings.unsqueeze(0),
-            object_boxes=box.to(device),
+            object_boxes=box,
             mask_output_size=output_size,
             return_intermediates=False,
         )
@@ -262,9 +254,13 @@ def main() -> None:
                     head,
                     feature_maps,
                     text_embeddings,
-                    normalized_box(selection, width=width, height=height),
+                    normalized_box(
+                        selection,
+                        width=width,
+                        height=height,
+                        reference=text_embeddings,
+                    ),
                     output_size=(height, width),
-                    device=device,
                     use_amp=args.amp,
                     mask_threshold=args.mask_threshold,
                 )

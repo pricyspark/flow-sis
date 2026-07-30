@@ -8,8 +8,6 @@ import warnings
 
 import torch
 
-from flowsis.utils import get_device
-
 if TYPE_CHECKING:
     from flowsis.pretrained.siglip2 import SigLIP2
 
@@ -41,7 +39,7 @@ class LabelPrompts:
                 self.model_name_or_path,
                 return_mode="pooled",
                 normalize=True,
-                device=self.device if self.device is not None else get_device(),
+                device=self.device,
             )
         return self._siglip2
 
@@ -99,7 +97,10 @@ class LabelPrompts:
             if not isinstance(embeddings, torch.Tensor) or embeddings.ndim != 2:
                 shape = getattr(embeddings, "shape", None)
                 raise ValueError(f"Expected prompt embeddings shaped [P,D] at {path}, got {shape}.")
-            cache[label] = embeddings.float().to(device)
+            cache[label] = embeddings.float()
+        # Tensor.to is a no-op when the cached tensor is already on the target
+        # device, and migrates it if the caller moved the model since caching.
+        cache[label] = cache[label].to(device)
         return cache[label]
 
     def embed_all(self) -> dict[str, torch.Tensor]:

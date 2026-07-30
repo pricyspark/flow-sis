@@ -21,6 +21,7 @@ from flowsis.artifacts import atomic_write_text
 from flowsis.data.object_records import get_object_records
 
 from .common import resolve_pretrained_source
+from .image_processing import preprocess_detr_bgr_frame, preprocess_detr_images
 
 
 DetectorArchitecture = Literal["rtdetrv2", "dfine"]
@@ -104,6 +105,8 @@ class Detector(Protocol):
         self,
         images: DetectorImages,
         annotations: Iterable[dict[str, Any]] | None = None,
+        *,
+        device_preprocess: bool = False,
     ) -> DetectorForwardResult: ...
 
     def infer(
@@ -111,6 +114,7 @@ class Detector(Protocol):
         images: DetectorImages,
         *,
         threshold: float = 0.1,
+        device_preprocess: bool | None = None,
     ) -> DetectorInferenceResult: ...
 
     def infer_frame(
@@ -124,6 +128,8 @@ class Detector(Protocol):
     def extract_feature_maps(
         self,
         images: DetectorImages,
+        *,
+        device_preprocess: bool = False,
     ) -> tuple[torch.Tensor, ...]: ...
 
     def split_backbone_parameters(
@@ -175,6 +181,27 @@ class BaseDetector(nn.Module):
         self._model = model
         self.source = source
         self._configured_image_size = image_size
+        self.register_buffer(
+            "_preprocess_mean",
+            torch.as_tensor(
+                getattr(processor, "image_mean", (0.0, 0.0, 0.0)),
+                dtype=torch.float32,
+            ),
+            persistent=False,
+        )
+        self.register_buffer(
+            "_preprocess_std",
+            torch.as_tensor(
+                getattr(processor, "image_std", (1.0, 1.0, 1.0)),
+                dtype=torch.float32,
+            ),
+            persistent=False,
+        )
+        self.register_buffer(
+            "_full_pixel_mask",
+            torch.ones((1, image_size, image_size), dtype=torch.int64),
+            persistent=False,
+        )
         self._validate_model_type()
         if device is not None:
             self.to(device)
@@ -219,6 +246,8 @@ class BaseDetector(nn.Module):
 
     @staticmethod
     def _image_list(images: DetectorImages) -> list[DetectorImage]:
+        if isinstance(images, torch.Tensor) and images.ndim == 4:
+            return list(images)
         if isinstance(images, (Image.Image, np.ndarray, torch.Tensor)):
             return [images]
         return list(images)
@@ -268,7 +297,40 @@ class BaseDetector(nn.Module):
         self,
         images: DetectorImages,
         annotations: Iterable[dict[str, Any]] | None = None,
+        *,
+        device_preprocess: bool = False,
     ) -> BatchFeature:
+        if device_preprocess:
+            image_values: Any = images
+            if not isinstance(images, torch.Tensor):
+                image_values = self._image_list(images)
+            annotation_values = (
+                None
+                if annotations is None
+                else [
+                    self._normalize_annotation(annotation)
+                    for annotation in annotations
+                ]
+            )
+            pixel_values, pixel_mask, labels = preprocess_detr_images(
+                self._processor,
+                image_values,
+                image_size=self.image_size,
+                device=self.device,
+                annotations=annotation_values,
+                image_mean=self._preprocess_mean,
+                image_std=self._preprocess_std,
+            )
+            batch = BatchFeature(
+                {
+                    "pixel_values": pixel_values,
+                    "pixel_mask": pixel_mask,
+                }
+            )
+            if labels is not None:
+                batch["labels"] = labels
+            return batch
+
         image_list = self._image_list(images)
         processor_kwargs: dict[str, Any] = {
             "return_tensors": "pt",
@@ -338,8 +400,16 @@ class BaseDetector(nn.Module):
         self,
         images: DetectorImages,
         annotations: Iterable[dict[str, Any]] | None = None,
+        *,
+        device_preprocess: bool = False,
     ) -> DetectorForwardResult:
-        outputs = self._forward_model(self.preprocess(images, annotations))
+        outputs = self._forward_model(
+            self.preprocess(
+                images,
+                annotations,
+                device_preprocess=device_preprocess,
+            )
+        )
         return DetectorForwardResult(
             loss=getattr(outputs, "loss", None),
             loss_dict=dict(getattr(outputs, "loss_dict", None) or {}),
@@ -377,12 +447,21 @@ class BaseDetector(nn.Module):
         images: DetectorImages,
         *,
         threshold: float = 0.1,
+        device_preprocess: bool | None = None,
     ) -> DetectorInferenceResult:
         was_training = self.training
         self.eval()
         try:
             image_list = self._image_list(images)
-            batch = self.preprocess(image_list)
+            if device_preprocess is None:
+                device_preprocess = self.device.type != "cpu"
+            preprocess_input: DetectorImages = image_list
+            if isinstance(images, torch.Tensor) and images.ndim == 4:
+                preprocess_input = images
+            batch = self.preprocess(
+                preprocess_input,
+                device_preprocess=device_preprocess,
+            )
             outputs = self._inference_model(
                 batch["pixel_values"],
                 batch.get("pixel_mask"),
@@ -431,8 +510,14 @@ class BaseDetector(nn.Module):
         self,
         frame_bgr: NDArray,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        raise NotImplementedError(
-            f"{self.architecture} does not provide device-side frame preprocessing."
+        return preprocess_detr_bgr_frame(
+            self._processor,
+            frame_bgr,
+            image_size=self.image_size,
+            device=self.device,
+            image_mean=self._preprocess_mean,
+            image_std=self._preprocess_std,
+            pixel_mask=self._full_pixel_mask,
         )
 
     def infer_frame(
@@ -460,8 +545,13 @@ class BaseDetector(nn.Module):
     def extract_feature_maps(
         self,
         images: DetectorImages,
+        *,
+        device_preprocess: bool = False,
     ) -> tuple[torch.Tensor, ...]:
-        batch = self.preprocess(images)
+        batch = self.preprocess(
+            images,
+            device_preprocess=device_preprocess,
+        )
         outputs = self._inference_model(
             batch["pixel_values"],
             batch.get("pixel_mask"),
