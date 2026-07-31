@@ -3,6 +3,8 @@ from .policy import (
     select_first_detection,
     select_recurrent_detection,
     select_recurrant_detection,
+    select_detection,
+    normalize_box,
 )
 from .tracker import SelectionTracker, TrackerConfig, detections_from_mapping
 from .types import Track, TrackDetection, TrackState
@@ -18,4 +20,6 @@ __all__ = [
     "select_first_detection",
     "select_recurrent_detection",
     "select_recurrant_detection",
+    "select_detection",
+    "normalize_box",
 ]

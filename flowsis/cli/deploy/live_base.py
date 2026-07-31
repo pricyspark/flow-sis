@@ -2,23 +2,16 @@ from __future__ import annotations
 
 import argparse
 import time
-from collections import deque
-from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, cast
 
 import cv2
 import numpy as np
 import torch
 
-from flowsis.base_head import BaseFusionHead
+from flowsis.base import FlowSISBase
 from flowsis.cli.common import add_detector_arguments
 from flowsis.cli.deploy.common import center_square, resolve_video_source
-from flowsis.head_checkpoint import load_head
-from flowsis.pretrained import load_detector
-from flowsis.selection import SelectionResult, select_first_detection, select_recurrent_detection
-from flowsis.utils import build_autocast_context, get_device
-from flowsis.data import LabelPrompts
+from flowsis.selection import SelectionResult
 
 
 WINDOW_NAME = "FlowSIS Live Inference"
@@ -60,57 +53,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-display", action="store_true")
     parser.add_argument("--max-frames", type=int, default=None)
     return parser.parse_args()
-
-
-def select_detection(
-    history: deque[Mapping[str, Any]],
-    previous: SelectionResult | None,
-) -> SelectionResult | None:
-    if not history or len(history[-1]["scores"]) == 0:
-        return None
-    if previous is None:
-        return select_first_detection(history)
-    return select_recurrent_detection(history, previous)
-
-
-def normalized_box(
-    selection: SelectionResult,
-    *,
-    width: int,
-    height: int,
-    reference: torch.Tensor,
-) -> torch.Tensor:
-    x1, y1, x2, y2 = selection.box
-    return reference.new_tensor(
-        [[x1 / width, y1 / height, x2 / width, y2 / height]],
-    ).clamp_(0.0, 1.0)
-
-
-@torch.inference_mode()
-def predict_mask(
-    head: BaseFusionHead,
-    feature_maps: list[torch.Tensor],
-    text_embeddings: torch.Tensor,
-    box: torch.Tensor,
-    *,
-    output_size: tuple[int, int],
-    use_amp: bool,
-    mask_threshold: float,
-) -> np.ndarray:
-    device = next(head.parameters()).device
-    with build_autocast_context(enabled=use_amp, device=device):
-        output = head(
-            feature_maps,
-            text_embeddings.unsqueeze(0),
-            object_boxes=box,
-            mask_output_size=output_size,
-            return_intermediates=False,
-        )
-    # Threshold on the GPU so only one byte per pixel crosses PCIe instead of
-    # a four-byte probability map. This produces the same binary mask used by
-    # rendering and avoids CPU-side sigmoid and threshold work.
-    mask = cast(torch.Tensor, output["mask_logits"])[0].sigmoid() >= mask_threshold
-    return mask.to(dtype=torch.uint8).cpu().numpy()
 
 
 def render_result(
@@ -184,19 +126,19 @@ def main() -> None:
     if args.no_display and args.output_path is None:
         raise ValueError("--no-display requires --output-path.")
 
-    device = torch.device(args.device) if args.device else get_device()
-    detector = load_detector(
+    model = FlowSISBase(
         args.detector_model_source,
-        architecture=args.detector_architecture,
+        args.head_path,
+        args.text_embeddings_dir,
+        detector_architecture=args.detector_architecture,
+        detection_threshold=args.detection_threshold,
+        mask_threshold=args.mask_threshold,
+        history_size=args.history_size,
         image_size=args.image_size,
-        device=device,
+        device=args.device,
+        use_amp=args.amp,
+        device_preprocess=not args.cpu_preprocess,
     )
-    detector.eval()
-    head, weights_path = load_head(args.head_path, device=device)
-    id2label = detector.label_names
-    prompt_cache: dict[str, torch.Tensor] = {}
-    history: deque[Mapping[str, Any]] = deque(maxlen=args.history_size)
-    previous_selection: SelectionResult | None = None
 
     capture = cv2.VideoCapture(resolve_video_source(args.video_source))
     if not capture.isOpened():
@@ -207,11 +149,11 @@ def main() -> None:
     print(
         "live_base",
         {
-            "detector_architecture": detector.architecture,
-            "detector": detector.source,
-            "head": str(weights_path),
+            "detector_architecture": model.detector.architecture,
+            "detector": model.detector.source,
+            "head": str(model.head_checkpoint_path),
             "video_source": args.video_source,
-            "device": str(device),
+            "device": str(model.device),
         },
     )
 
@@ -221,57 +163,20 @@ def main() -> None:
             if not ok:
                 break
             square_bgr = center_square(frame_bgr)
-            height, width = square_bgr.shape[:2]
             start = time.perf_counter()
-            inference = detector.infer_frame(
-                square_bgr,
-                threshold=args.detection_threshold,
-                device_preprocess=not args.cpu_preprocess,
+            device_mask = model.infer(square_bgr)
+            mask = (
+                None
+                if device_mask is None
+                else device_mask.to(dtype=torch.uint8).cpu().numpy()
             )
-            gpu_detections = inference.detections[0]
-            # Selection revisits every history entry for each candidate. Copy
-            # detections once instead of synchronizing CUDA repeatedly there.
-            detections = {
-                key: value.detach().cpu().tolist()
-                for key, value in gpu_detections.items()
-            }
-            history.append(detections)
-            selection = select_detection(history, previous_selection)
-            mask: np.ndarray | None = None
-            selected_label: str | None = None
-            if selection is not None:
-                selected_label = id2label.get(selection.label, f"class_{selection.label}")
-                text_embeddings = LabelPrompts.load_embeddings(
-                    selected_label,
-                    args.text_embeddings_dir,
-                    prompt_cache,
-                    device=device,
-                )
-                feature_maps = [
-                    feature.float() for feature in inference.feature_maps
-                ]
-                mask = predict_mask(
-                    head,
-                    feature_maps,
-                    text_embeddings,
-                    normalized_box(
-                        selection,
-                        width=width,
-                        height=height,
-                        reference=text_embeddings,
-                    ),
-                    output_size=(height, width),
-                    use_amp=args.amp,
-                    mask_threshold=args.mask_threshold,
-                )
-                previous_selection = selection
 
             elapsed_ms = (time.perf_counter() - start) * 1000.0
             rendered = render_result(
                 square_bgr,
                 mask,
-                selection,
-                label=selected_label,
+                model.current_selection,
+                label=model.selected_label,
                 mask_alpha=args.mask_alpha,
                 elapsed_ms=elapsed_ms,
             )

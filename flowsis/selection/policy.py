@@ -299,9 +299,37 @@ def select_recurrent_detection(
     return select_recurrant_detection(detections_log, previous_selection)
 
 
+def select_detection(
+    detections_log: DetectionLog,
+    previous_selection: SelectionResult | None = None,
+) -> SelectionResult | None:
+    if not detections_log or not _to_scores(detections_log[-1]):
+        return None
+    if previous_selection is None:
+        return select_first_detection(detections_log)
+    return select_recurrent_detection(detections_log, previous_selection)
+
+
+def normalize_box(
+    selection: SelectionResult,
+    *,
+    width: int,
+    height: int,
+) -> tuple[float, float, float, float]:
+    x1, y1, x2, y2 = selection.box
+    return (
+        max(0.0, min(x1 / width, 1.0)),
+        max(0.0, min(y1 / height, 1.0)),
+        max(0.0, min(x2 / width, 1.0)),
+        max(0.0, min(y2 / height, 1.0)),
+    )
+
+
 __all__ = [
     "SelectionResult",
     "select_first_detection",
     "select_recurrent_detection",
     "select_recurrant_detection",
+    "select_detection",
+    "normalize_box",
 ]
