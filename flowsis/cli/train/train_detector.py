@@ -247,10 +247,6 @@ def build_detection_loader() -> CallablePipeline:
 
 def build_train_augmentation_steps(args: argparse.Namespace) -> list[AugmentationStep]:
     steps: list[AugmentationStep] = []
-    if args.use_rotation_augment:
-        steps.append(("rotation_augment", rotation_augment, {"pad": 1}))
-    if args.use_roi_square_augment:
-        steps.append(("roi_square_augment", roi_square_augment, {"crop_size": args.image_size}))
     if args.use_overlap_augment:
         overlay_prepare = build_augmentation_pipeline(steps)
         steps.append(
@@ -265,6 +261,10 @@ def build_train_augmentation_steps(args: argparse.Namespace) -> list[Augmentatio
                 },
             )
         )
+    if args.use_rotation_augment:
+        steps.append(("rotation_augment", rotation_augment, {"pad": 1}))
+    if args.use_roi_square_augment:
+        steps.append(("roi_square_augment", roi_square_augment, {"crop_size": args.image_size}))
     if args.use_photometric_augment:
         steps.append(("photometric_augment", photometric_augment, {}))
     return steps

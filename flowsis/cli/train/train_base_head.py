@@ -319,12 +319,6 @@ def build_online_dataset(split_dataset: Dataset, args: argparse.Namespace) -> Da
     augmentations = []
     augmentation_kwargs = []
 
-    if args.use_rotation_augment:
-        augmentations.append(rotation_augment)
-        augmentation_kwargs.append({"pad": 1})
-    if args.use_roi_square_augment:
-        augmentations.append(roi_square_augment)
-        augmentation_kwargs.append({"crop_size": args.image_size})
     if args.use_overlap_augment:
         overlay_prepare = CallablePipeline(augmentations, augmentation_kwargs)
         augmentations.append(overlap_augment)
@@ -336,6 +330,12 @@ def build_online_dataset(split_dataset: Dataset, args: argparse.Namespace) -> Da
                 "overlay_prepare": overlay_prepare,
             }
         )
+    if args.use_rotation_augment:
+        augmentations.append(rotation_augment)
+        augmentation_kwargs.append({"pad": 1})
+    if args.use_roi_square_augment:
+        augmentations.append(roi_square_augment)
+        augmentation_kwargs.append({"crop_size": args.image_size})
     if args.use_photometric_augment:
         augmentations.append(photometric_augment)
         augmentation_kwargs.append({})
