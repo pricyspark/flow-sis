@@ -8,7 +8,6 @@ import torch
 
 from flowsis.artifacts import atomic_torch_save
 
-
 FEATURE_BUNDLE_FILE = "feature_bundle.pt"
 FEATURE_BUNDLE_VERSION = 1
 FEATURE_KIND = "projected_multiscale_encoder"
@@ -115,10 +114,7 @@ def load_feature_bundle(
             f"Expected {expected_channels} channels per feature level in {path}, "
             f"got {channels}."
         )
-    if (
-        expected_image_size is not None
-        and metadata.image_size != expected_image_size
-    ):
+    if expected_image_size is not None and metadata.image_size != expected_image_size:
         raise ValueError(
             f"Feature bundle {path} was generated at image size "
             f"{metadata.image_size}, expected {expected_image_size}."

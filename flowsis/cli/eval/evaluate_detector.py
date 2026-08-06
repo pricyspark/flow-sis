@@ -41,10 +41,14 @@ def box_iou(box: np.ndarray, boxes: np.ndarray) -> np.ndarray:
     intersection = np.prod(np.maximum(bottom_right - top_left, 0.0), axis=1)
     box_area = np.prod(np.maximum(box[2:] - box[:2], 0.0))
     areas = np.prod(np.maximum(boxes[:, 2:] - boxes[:, :2], 0.0), axis=1)
-    return intersection / np.maximum(box_area + areas - intersection, np.finfo(float).eps)
+    return intersection / np.maximum(
+        box_area + areas - intersection, np.finfo(float).eps
+    )
 
 
-def precision_recall(records: list[tuple[float, bool]], positives: int) -> dict[str, Any]:
+def precision_recall(
+    records: list[tuple[float, bool]], positives: int
+) -> dict[str, Any]:
     records.sort(key=lambda record: record[0], reverse=True)
     scores = np.asarray([record[0] for record in records], dtype=np.float64)
     true_positive = np.asarray([record[1] for record in records], dtype=np.float64)
@@ -58,10 +62,12 @@ def precision_recall(records: list[tuple[float, bool]], positives: int) -> dict[
     padded_precision = np.concatenate(([1.0], precision, [0.0]))
     padded_precision = np.maximum.accumulate(padded_precision[::-1])[::-1]
     changes = np.flatnonzero(padded_recall[1:] != padded_recall[:-1])
-    ap = float(np.sum(
-        (padded_recall[changes + 1] - padded_recall[changes])
-        * padded_precision[changes + 1]
-    ))
+    ap = float(
+        np.sum(
+            (padded_recall[changes + 1] - padded_recall[changes])
+            * padded_precision[changes + 1]
+        )
+    )
     return {"scores": scores, "precision": precision, "recall": recall, "ap": ap}
 
 
@@ -71,7 +77,9 @@ def label_names(split: Dataset) -> dict[int, str]:
     category = getattr(category, "feature", category)
     if not isinstance(category, ClassLabel):
         raise TypeError("Expected objects.category to be a ClassLabel.")
-    return {index: name or f"class_{index}" for index, name in enumerate(category.names)}
+    return {
+        index: name or f"class_{index}" for index, name in enumerate(category.names)
+    }
 
 
 def main() -> None:
@@ -152,13 +160,18 @@ def main() -> None:
         reverse=True,
         key=lambda item: item[0],
     ):
-        candidates = ground_truth[image_index].get(label, np.empty((0, 4), dtype=np.float64))
+        candidates = ground_truth[image_index].get(
+            label, np.empty((0, 4), dtype=np.float64)
+        )
         ious = box_iou(box, candidates)
         is_true_positive = False
         if ious.size:
             candidate_index = int(np.argmax(ious))
             key = (image_index, label)
-            if ious[candidate_index] >= args.iou_threshold and candidate_index not in matched[key]:
+            if (
+                ious[candidate_index] >= args.iou_threshold
+                and candidate_index not in matched[key]
+            ):
                 matched[key].add(candidate_index)
                 is_true_positive = True
         class_records[label].append((score, is_true_positive))
@@ -166,7 +179,9 @@ def main() -> None:
     metrics: dict[int, dict[str, Any]] = {}
     for label in sorted(names):
         metrics[label] = precision_recall(class_records[label], positives[label])
-    micro_records = [record for label in sorted(names) for record in class_records[label]]
+    micro_records = [
+        record for label in sorted(names) for record in class_records[label]
+    ]
     micro = precision_recall(micro_records, sum(positives.values()))
 
     with (output_dir / "pr_curve.csv").open("w", newline="") as handle:
@@ -181,15 +196,24 @@ def main() -> None:
                 writer.writerow([label, names[label], score, recall, precision])
 
     summary = {
-        "architecture": architecture, "model": model.source,
+        "architecture": architecture,
+        "model": model.source,
         "dataset_path": str(args.dataset_path),
-        "split": args.split, "num_images": len(split), "iou_threshold": args.iou_threshold,
-        "score_threshold": args.score_threshold, "num_ground_truth": sum(positives.values()),
-        "num_predictions": len(predictions), "micro_ap": micro["ap"],
+        "split": args.split,
+        "num_images": len(split),
+        "iou_threshold": args.iou_threshold,
+        "score_threshold": args.score_threshold,
+        "num_ground_truth": sum(positives.values()),
+        "num_predictions": len(predictions),
+        "micro_ap": micro["ap"],
         "macro_ap": float(np.mean([metric["ap"] for metric in metrics.values()])),
         "classes": {
-            names[label]: {"class_id": label, "ground_truth": positives[label],
-                           "predictions": len(class_records[label]), "ap": metric["ap"]}
+            names[label]: {
+                "class_id": label,
+                "ground_truth": positives[label],
+                "predictions": len(class_records[label]),
+                "ap": metric["ap"],
+            }
             for label, metric in metrics.items()
         },
     }
@@ -209,8 +233,13 @@ def main() -> None:
         linewidth=2,
         label=f"micro (AP={micro['ap']:.3f})",
     )
-    axis.set(xlim=(0, 1), ylim=(0, 1.01), xlabel="Recall", ylabel="Precision",
-             title=f"{architecture} precision-recall at IoU {args.iou_threshold:.2f}")
+    axis.set(
+        xlim=(0, 1),
+        ylim=(0, 1.01),
+        xlabel="Recall",
+        ylabel="Precision",
+        title=f"{architecture} precision-recall at IoU {args.iou_threshold:.2f}",
+    )
     axis.grid(alpha=0.25)
     axis.legend(loc="lower left", fontsize="small")
     figure.tight_layout()

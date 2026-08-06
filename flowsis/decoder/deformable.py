@@ -9,6 +9,7 @@ from flowsis.utils import resolve_activation
 from .shape import validate_feature_list, pool_text_embeddings
 from .position import build_reference_grid
 
+
 class TextGuidedDeformableFusion(nn.Module):
     """
     Lightweight multi-scale deformable fusion built from standard PyTorch ops.
@@ -38,7 +39,9 @@ class TextGuidedDeformableFusion(nn.Module):
         if num_points <= 0:
             raise ValueError(f"num_points must be positive, but received {num_points}.")
         if offset_scale <= 0:
-            raise ValueError(f"offset_scale must be positive, but received {offset_scale}.")
+            raise ValueError(
+                f"offset_scale must be positive, but received {offset_scale}."
+            )
 
         self.num_feature_levels = int(num_feature_levels)
         self.num_points = int(num_points)
@@ -48,7 +51,7 @@ class TextGuidedDeformableFusion(nn.Module):
         self.text_proj = nn.Linear(text_dim, image_dim)
         self.value_proj = nn.ModuleList(
             [
-                nn.Conv2d(image_dim, image_dim, kernel_size=1) 
+                nn.Conv2d(image_dim, image_dim, kernel_size=1)
                 for _ in range(self.num_feature_levels)
             ]
         )
@@ -78,11 +81,15 @@ class TextGuidedDeformableFusion(nn.Module):
     ) -> torch.Tensor:
         batch_size, channels = value_features.shape[:2]
         query_height, query_width, num_points = sampling_locations.shape[1:4]
-        sampling_grid = sampling_locations.mul(2.0).sub(1.0).reshape(
-            batch_size,
-            query_height,
-            query_width * num_points,
-            2,
+        sampling_grid = (
+            sampling_locations.mul(2.0)
+            .sub(1.0)
+            .reshape(
+                batch_size,
+                query_height,
+                query_width * num_points,
+                2,
+            )
         )
         sampled = F.grid_sample(
             value_features,
@@ -91,7 +98,9 @@ class TextGuidedDeformableFusion(nn.Module):
             padding_mode="border",
             align_corners=False,
         )
-        return sampled.reshape(batch_size, channels, query_height, query_width, num_points)
+        return sampled.reshape(
+            batch_size, channels, query_height, query_width, num_points
+        )
 
     def forward(
         self,
@@ -127,11 +136,15 @@ class TextGuidedDeformableFusion(nn.Module):
             self.num_points,
             2,
         )
-        attention_logits = self.attention_head(query_state).permute(0, 2, 3, 1).reshape(
-            batch_size,
-            query_height,
-            query_width,
-            self.num_feature_levels * self.num_points,
+        attention_logits = (
+            self.attention_head(query_state)
+            .permute(0, 2, 3, 1)
+            .reshape(
+                batch_size,
+                query_height,
+                query_width,
+                self.num_feature_levels * self.num_points,
+            )
         )
         attention_weights = torch.softmax(attention_logits, dim=-1).reshape(
             batch_size,
@@ -156,7 +169,9 @@ class TextGuidedDeformableFusion(nn.Module):
             ).view(1, 1, 1, 1, 2)
             level_offsets = torch.tanh(sampling_offsets[:, :, :, level_index])
             level_offsets = level_offsets * (self.offset_scale / offset_normalizer)
-            sampling_locations = (reference_grid.unsqueeze(3) + level_offsets).clamp(0.0, 1.0)
+            sampling_locations = (reference_grid.unsqueeze(3) + level_offsets).clamp(
+                0.0, 1.0
+            )
             sampled = self._sample_level(value_features, sampling_locations)
             level_weights = attention_weights[:, :, :, level_index].unsqueeze(1)
             aggregated = aggregated + (sampled * level_weights).sum(dim=-1)

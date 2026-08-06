@@ -10,7 +10,6 @@ from torch.amp import GradScaler
 
 from flowsis.artifacts import atomic_torch_save, atomic_write_text
 
-
 TRAINING_STATE_VERSION = 1
 
 
@@ -37,9 +36,7 @@ def build_autocast_context(
     return nullcontext()
 
 
-def build_grad_scaler(
-    *, enabled: bool, device: torch.device
-) -> GradScaler | None:
+def build_grad_scaler(*, enabled: bool, device: torch.device) -> GradScaler | None:
     if not is_amp_enabled(enabled=enabled, device=device):
         return None
     return GradScaler("cuda")

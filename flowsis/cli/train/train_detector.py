@@ -39,7 +39,7 @@ from flowsis.utils import (
 from flowsis.data import (
     PreparedDataset,
     CallablePipeline,
-    load_object_image, 
+    load_object_image,
     load_object_masks,
 )
 from flowsis.data.images import get_image, get_example_image_source
@@ -175,8 +175,7 @@ def dataset_to_annotation(example: dict[str, Any]) -> dict[str, Any]:
 
 def collate_examples(batch: list[dict[str, Any]]) -> dict[str, Any]:
     image_tensors = [
-        image_to_rgb_tensor(get_image(example, convert_mode="RGB"))
-        for example in batch
+        image_to_rgb_tensor(get_image(example, convert_mode="RGB")) for example in batch
     ]
     images: torch.Tensor | list[torch.Tensor]
     if all(image.shape == image_tensors[0].shape for image in image_tensors):
@@ -187,7 +186,9 @@ def collate_examples(batch: list[dict[str, Any]]) -> dict[str, Any]:
         "images": images,
         "annotations": [dataset_to_annotation(example) for example in batch],
         "image_ids": [int(example["image_id"]) for example in batch],
-        "orig_sizes": [(int(example["height"]), int(example["width"])) for example in batch],
+        "orig_sizes": [
+            (int(example["height"]), int(example["width"])) for example in batch
+        ],
     }
 
 
@@ -197,7 +198,9 @@ def load_label_metadata(
 ) -> tuple[int, dict[int, str]]:
     split_features = dataset[split_name].features
     if split_features is None:
-        raise ValueError(f"Dataset split {split_name!r} does not define a feature schema.")
+        raise ValueError(
+            f"Dataset split {split_name!r} does not define a feature schema."
+        )
     object_schema = get_object_feature_schema(split_features["objects"])
     category_feature = object_schema["category"]
     if hasattr(category_feature, "feature"):
@@ -264,17 +267,25 @@ def build_train_augmentation_steps(args: argparse.Namespace) -> list[Augmentatio
     if args.use_rotation_augment:
         steps.append(("rotation_augment", rotation_augment, {"pad": 1}))
     if args.use_roi_square_augment:
-        steps.append(("roi_square_augment", roi_square_augment, {"crop_size": args.image_size}))
+        steps.append(
+            ("roi_square_augment", roi_square_augment, {"crop_size": args.image_size})
+        )
     if args.use_photometric_augment:
         steps.append(("photometric_augment", photometric_augment, {}))
     return steps
 
 
-def build_validation_augmentation_steps(args: argparse.Namespace) -> list[AugmentationStep]:
-    return [("center_square_augment", center_square_augment, {"crop_size": args.image_size})]
+def build_validation_augmentation_steps(
+    args: argparse.Namespace,
+) -> list[AugmentationStep]:
+    return [
+        ("center_square_augment", center_square_augment, {"crop_size": args.image_size})
+    ]
 
 
-def build_augmentation_pipeline(steps: list[AugmentationStep]) -> CallablePipeline | None:
+def build_augmentation_pipeline(
+    steps: list[AugmentationStep],
+) -> CallablePipeline | None:
     if not steps:
         return None
 
@@ -519,9 +530,9 @@ def train_one_epoch(
         epoch_loss_sum += loss_value
         epoch_batch_count += 1
         for key, value in forward_result.loss_dict.items():
-            epoch_loss_dict_sums[key] = epoch_loss_dict_sums.get(
-                key, 0.0
-            ) + float(value.detach().item())
+            epoch_loss_dict_sums[key] = epoch_loss_dict_sums.get(key, 0.0) + float(
+                value.detach().item()
+            )
 
         log_event(
             "train_step",
@@ -542,7 +553,7 @@ def train_one_epoch(
         "loss_dict": {key: round(value, 6) for key, value in epoch_loss_dict.items()},
         "first_loss": None if first_loss is None else round(first_loss, 6),
         "last_loss": None if last_loss is None else round(last_loss, 6),
-        "time": end - start
+        "time": end - start,
     }
     return summary, global_step
 
@@ -574,7 +585,9 @@ def evaluate(
             for key, value in forward_result.loss_dict.items():
                 loss_sums[key] = loss_sums.get(key, 0.0) + float(value.detach().item())
 
-    return total_loss / max(total_batches, 1), average_loss_dict(loss_sums, total_batches)
+    return total_loss / max(total_batches, 1), average_loss_dict(
+        loss_sums, total_batches
+    )
 
 
 def save_final_model(model: Detector, output_dir: Path) -> Path:
@@ -656,9 +669,7 @@ def main() -> None:
         else Path(args.output_dir)
     )
     output_dir.mkdir(parents=True, exist_ok=True)
-    training_log_path = (
-        output_dir / "training_log.jsonl" if args.save_logs else None
-    )
+    training_log_path = output_dir / "training_log.jsonl" if args.save_logs else None
 
     num_labels, id2label = load_label_metadata(dataset, args.train_split)
     model = build_model(
@@ -681,7 +692,9 @@ def main() -> None:
             "model_source": model.source,
             "num_labels": num_labels,
             "id2label": id2label,
-            "resume_checkpoint": None if resume_checkpoint is None else str(resume_checkpoint),
+            "resume_checkpoint": (
+                None if resume_checkpoint is None else str(resume_checkpoint)
+            ),
         },
     )
     log_event("saved_run_config", {"path": str(run_config_path)})
@@ -709,7 +722,7 @@ def main() -> None:
             "use_photometric_augment": args.use_photometric_augment,
         },
     )
-    
+
     train_loader = build_dataloader(
         split_dataset=train_dataset,
         batch_size=args.batch_size,
@@ -718,7 +731,7 @@ def main() -> None:
         seed=args.seed,
         pin_memory=device.type == "cuda",
     )
-    
+
     validation_loader = None
     if args.validation_split in dataset:
         val_dataset = cast(
@@ -817,8 +830,7 @@ def main() -> None:
                 "global_step": global_step,
                 "loss": round(validation_loss, 6),
                 "loss_dict": {
-                    key: round(value, 6)
-                    for key, value in validation_loss_dict.items()
+                    key: round(value, 6) for key, value in validation_loss_dict.items()
                 },
             }
             log_event("validation_epoch", validation_summary)

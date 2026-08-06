@@ -57,7 +57,6 @@ from flowsis.utils import (
     set_seed,
 )
 
-
 PhaseName = Literal["offline", "online"]
 
 
@@ -158,7 +157,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--nhead", type=int, default=8)
     parser.add_argument("--decode-ffn-dim", type=int, default=512)
     parser.add_argument("--dropout", type=float, default=0.1)
-    parser.add_argument("--activation", type=str, choices=("gelu", "relu"), default="gelu")
+    parser.add_argument(
+        "--activation", type=str, choices=("gelu", "relu"), default="gelu"
+    )
     parser.add_argument("--num-feature-levels", type=int, default=3)
     parser.add_argument(
         "--decode-pos-encode",
@@ -253,7 +254,9 @@ def load_segmentation_objects(example: dict[str, Any], **_: Any) -> dict[str, An
 
 def resize_mask_tensor(mask: torch.Tensor, *, image_size: int) -> torch.Tensor:
     if mask.ndim != 2:
-        raise ValueError(f"Expected 2D mask tensor, but received shape {tuple(mask.shape)}.")
+        raise ValueError(
+            f"Expected 2D mask tensor, but received shape {tuple(mask.shape)}."
+        )
     if mask.shape == (image_size, image_size):
         return mask
     resized = F.interpolate(
@@ -277,7 +280,9 @@ def normalize_object_box(obj: dict[str, Any], example: dict[str, Any]) -> list[f
 
 
 def load_text_embedding(obj: dict[str, Any]) -> torch.Tensor:
-    text_embedding = torch.load(obj["text_embedding_path"], map_location="cpu", weights_only=False)
+    text_embedding = torch.load(
+        obj["text_embedding_path"], map_location="cpu", weights_only=False
+    )
     if not isinstance(text_embedding, torch.Tensor):
         raise TypeError(
             f"Expected text embedding tensor at {obj['text_embedding_path']}, "
@@ -353,21 +358,26 @@ def build_online_dataset(split_dataset: Dataset, args: argparse.Namespace) -> Da
     )
 
 
-def build_validation_dataset(split_dataset: Dataset, args: argparse.Namespace) -> Dataset:
+def build_validation_dataset(
+    split_dataset: Dataset, args: argparse.Namespace
+) -> Dataset:
     return cast(
         Dataset,
         PreparedDataset(
             split_dataset,
             loader=CallablePipeline((load_object_image, load_segmentation_objects)),
-            augment=CallablePipeline((center_square_augment,), ({"crop_size": args.image_size},)),
+            augment=CallablePipeline(
+                (center_square_augment,), ({"crop_size": args.image_size},)
+            ),
         ),
     )
 
 
-def collate_online_examples(batch: list[dict[str, Any]], *, image_size: int) -> dict[str, Any]:
+def collate_online_examples(
+    batch: list[dict[str, Any]], *, image_size: int
+) -> dict[str, Any]:
     image_tensors = [
-        image_to_rgb_tensor(get_image(example, convert_mode="RGB"))
-        for example in batch
+        image_to_rgb_tensor(get_image(example, convert_mode="RGB")) for example in batch
     ]
     images: torch.Tensor | list[torch.Tensor]
     if all(image.shape == image_tensors[0].shape for image in image_tensors):
@@ -381,7 +391,9 @@ def collate_online_examples(batch: list[dict[str, Any]], *, image_size: int) -> 
         if "mask" in obj
     ]
     if not object_records:
-        raise ValueError("An online segmentation batch must contain at least one valid object.")
+        raise ValueError(
+            "An online segmentation batch must contain at least one valid object."
+        )
     return {
         "images": images,
         "object_image_indices": torch.tensor(
@@ -432,7 +444,9 @@ def collate_offline_examples(
         )
 
     stacked_feature_levels = [
-        torch.stack([feature_list[level_index] for feature_list in feature_lists], dim=0)
+        torch.stack(
+            [feature_list[level_index] for feature_list in feature_lists], dim=0
+        )
         for level_index in range(num_levels)
     ]
 
@@ -442,7 +456,9 @@ def collate_offline_examples(
         for obj in example["objects"]
     ]
     if not object_records:
-        raise ValueError("An offline segmentation batch must contain at least one object.")
+        raise ValueError(
+            "An offline segmentation batch must contain at least one object."
+        )
     return {
         "multi_image_features": stacked_feature_levels,
         "object_image_indices": torch.tensor(
@@ -454,7 +470,9 @@ def collate_offline_examples(
         "target_masks": torch.stack(
             [
                 resize_mask_tensor(
-                    torch.from_numpy(load_binary(obj["mask_path"]).astype("float32", copy=False)),
+                    torch.from_numpy(
+                        load_binary(obj["mask_path"]).astype("float32", copy=False)
+                    ),
                     image_size=image_size,
                 )
                 for _, _, obj in object_records
@@ -602,9 +620,9 @@ def compute_segmentation_objective(
         )
         iou = reduce_objects((hard_intersection + 1.0) / (union + 1.0))
         brier = reduce_objects(
-            F.mse_loss(probabilities.float(), target_masks.float(), reduction="none").mean(
-                dim=reduce_dims
-            )
+            F.mse_loss(
+                probabilities.float(), target_masks.float(), reduction="none"
+            ).mean(dim=reduce_dims)
         )
 
     return {
@@ -632,9 +650,10 @@ def compute_batch_loss(
     text_embeddings = batch["text_embeddings"].to(device, non_blocking=True)
     text_padding_mask = None
     if head.training and prompt_dropout > 0.0 and text_embeddings.ndim == 3:
-        text_padding_mask = torch.rand(
-            text_embeddings.shape[:2], device=text_embeddings.device
-        ) < prompt_dropout
+        text_padding_mask = (
+            torch.rand(text_embeddings.shape[:2], device=text_embeddings.device)
+            < prompt_dropout
+        )
         all_dropped = text_padding_mask.all(dim=1)
         if all_dropped.any():
             keep_indices = torch.randint(
@@ -944,9 +963,7 @@ def main() -> None:
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    training_log_path = (
-        output_dir / "training_log.jsonl" if args.save_logs else None
-    )
+    training_log_path = output_dir / "training_log.jsonl" if args.save_logs else None
 
     stages = parse_stage_spec(args.train_stages)
     train_loaders: dict[PhaseName, DataLoader] = {}
@@ -954,7 +971,9 @@ def main() -> None:
 
     if any(phase == "online" for phase, _ in stages):
         online_train_dataset = build_online_dataset(dataset[args.train_split], args)
-        online_validation_dataset = build_validation_dataset(dataset[args.validation_split], args)
+        online_validation_dataset = build_validation_dataset(
+            dataset[args.validation_split], args
+        )
         train_loaders["online"] = build_dataloader(
             online_train_dataset,
             batch_size=args.batch_size,
@@ -1033,7 +1052,9 @@ def main() -> None:
     log_event("saved_run_config", {"path": str(run_config_path)})
     optimizer = build_optimizer(head, lr=args.lr, weight_decay=args.weight_decay)
     total_steps = estimate_total_steps(stages, train_loaders, max_steps=args.max_steps)
-    scheduler = build_scheduler(optimizer, warmup_steps=args.warmup_steps, total_steps=total_steps)
+    scheduler = build_scheduler(
+        optimizer, warmup_steps=args.warmup_steps, total_steps=total_steps
+    )
     scaler = build_grad_scaler(enabled=args.amp, device=device)
 
     start_epoch = 0

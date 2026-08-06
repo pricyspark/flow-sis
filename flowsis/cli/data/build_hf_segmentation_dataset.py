@@ -8,7 +8,6 @@ from datasets import ClassLabel, Dataset, DatasetDict, Features, Sequence, Value
 from flowsis.data.masks import mask2xywh, load_mask
 from flowsis.utils import load_classes
 
-
 DEFAULT_MANIFEST_PATH = Path("data/manifests/frame_manifest.csv")
 DEFAULT_MASKS_DIR = Path("data/masks")
 DEFAULT_CLASSES_PATH = Path("data/manifests/classes.json")
@@ -24,7 +23,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--manifest-path", type=Path, default=DEFAULT_MANIFEST_PATH)
     parser.add_argument("--masks-dir", type=Path, default=DEFAULT_MASKS_DIR)
     parser.add_argument("--classes-path", type=Path, default=DEFAULT_CLASSES_PATH)
-    parser.add_argument("--text-embeddings-dir", type=Path, default=DEFAULT_TEXT_EMBEDDINGS_DIR)
+    parser.add_argument(
+        "--text-embeddings-dir", type=Path, default=DEFAULT_TEXT_EMBEDDINGS_DIR
+    )
     parser.add_argument(
         "--feature-cache-dir",
         type=Path,
@@ -50,7 +51,9 @@ def build_cache_key(video_id: str, frame_idx: str, image_id: str) -> str:
     return f"video_{int(video_id):06d}_frame_{int(frame_idx):06d}_image_{int(image_id):08d}"
 
 
-def validate_split_sizes(train_size: float, validation_size: float, test_size: float) -> None:
+def validate_split_sizes(
+    train_size: float, validation_size: float, test_size: float
+) -> None:
     total = train_size + validation_size + test_size
     if abs(total - 1.0) > 1e-6:
         raise ValueError(

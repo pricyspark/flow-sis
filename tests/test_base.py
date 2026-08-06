@@ -71,7 +71,9 @@ def model(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> FlowSISBase:
     detector = FakeDetector()
     head = FakeHead()
     monkeypatch.setattr(base_module, "load_detector", lambda *args, **kwargs: detector)
-    monkeypatch.setattr(base_module, "load_head", lambda *args, **kwargs: (head, tmp_path))
+    monkeypatch.setattr(
+        base_module, "load_head", lambda *args, **kwargs: (head, tmp_path)
+    )
     monkeypatch.setattr(
         base_module.LabelPrompts,
         "load_embeddings",

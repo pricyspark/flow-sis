@@ -12,7 +12,6 @@ from typing import Optional, Literal
 from collections import defaultdict
 from sklearn.cluster import AgglomerativeClustering
 
-
 DEFAULT_VIDEO_DIR = Path("data/raw")
 DEFAULT_FRAME_DIR = Path("data/frames")
 DEFAULT_MANIFEST_DIR = Path("data/manifests")
@@ -42,8 +41,8 @@ class FrameRecord:
     frame_bgr: NDArray
     height: int
     width: int
-    
-    
+
+
 @dataclass
 class ClusterSample:
     cluster_id: int
@@ -54,7 +53,9 @@ class ClusterSample:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Sample keyframes from videos using pHash and agglomerative clustering.")
+    parser = argparse.ArgumentParser(
+        description="Sample keyframes from videos using pHash and agglomerative clustering."
+    )
     parser.add_argument("--video-dir", type=Path, default=DEFAULT_VIDEO_DIR)
     parser.add_argument("--frame-dir", type=Path, default=DEFAULT_FRAME_DIR)
     parser.add_argument("--manifest-dir", type=Path, default=DEFAULT_MANIFEST_DIR)
@@ -110,35 +111,35 @@ def extract_frame_records(
     hash_size: int = 8,
 ) -> list[FrameRecord]:
     cap = cv2.VideoCapture(video_path)
-    
+
     records: list[FrameRecord] = []
-    
+
     frame_idx = 0
     while True:
         ok, frame = cap.read()
         if not ok:
             break
-        
+
         if frame_idx % frame_stride == 0:
             phash = compute_phash_u64(frame, hash_size=hash_size)
             blur = var_laplacian(frame)
-            video_idx = int(video_path.stem.partition('_')[0])
-            
+            video_idx = int(video_path.stem.partition("_")[0])
+
             records.append(
                 FrameRecord(
-                    video_path = video_path,
-                    video_idx = video_idx,
-                    frame_idx = frame_idx,
-                    phash = phash,
-                    blur_score = blur,
-                    frame_bgr = frame.copy(),
-                    height = frame.shape[0],
-                    width = frame.shape[1],
+                    video_path=video_path,
+                    video_idx=video_idx,
+                    frame_idx=frame_idx,
+                    phash=phash,
+                    blur_score=blur,
+                    frame_bgr=frame.copy(),
+                    height=frame.shape[0],
+                    width=frame.shape[1],
                 )
             )
-            
+
         frame_idx += 1
-    
+
     cap.release()
     return records
 
@@ -146,7 +147,7 @@ def extract_frame_records(
 def phash_distance_matrix(records: list[FrameRecord]) -> NDArray:
     n = len(records)
     dists = np.zeros((n, n), dtype=float)
-    
+
     for i in range(n):
         hash_i = records[i].phash
         for j in range(i + 1, n):
@@ -154,7 +155,7 @@ def phash_distance_matrix(records: list[FrameRecord]) -> NDArray:
             dist = hamming_u64(hash_i, hash_j)
             dists[i, j] = dist
             dists[j, i] = dist
-            
+
     return dists
 
 
@@ -169,42 +170,37 @@ def cluster_phash(
         return []
     if n == 1:
         return [[0]]
-    
+
     dists = phash_distance_matrix(records)
-    
+
     if n_samples is not None:
         hamming_threshold = None
-    
+
     model = AgglomerativeClustering(
-        n_clusters = n_samples,
-        metric = "precomputed",
-        linkage = linkage,
-        distance_threshold = hamming_threshold,
+        n_clusters=n_samples,
+        metric="precomputed",
+        linkage=linkage,
+        distance_threshold=hamming_threshold,
     )
-        
+
     model.fit(dists)
-    
+
     labels = model.labels_
     sets: dict[int, list[int]] = {}
     for i, label in enumerate(labels):
         sets.setdefault(int(label), []).append(i)
-            
+
     clusters = list(sets.values())
-    
+
     # Sort clusters by size
     clusters.sort(
-        key = lambda idxs: (
-            -len(idxs),
-            min(records[i].frame_idx for i in idxs)
-        )
+        key=lambda idxs: (-len(idxs), min(records[i].frame_idx for i in idxs))
     )
     return clusters
 
 
 def filtered_medoid(
-    records: list[FrameRecord],
-    cluster_idxs: list[int],
-    blur_filter: float = 0.3
+    records: list[FrameRecord], cluster_idxs: list[int], blur_filter: float = 0.3
 ) -> tuple[FrameRecord, int, float]:
     """
     Filter blurry frames and return frame with lowest average Hamming distance
@@ -220,13 +216,13 @@ def filtered_medoid(
     """
     cluster_sorted = sorted(
         cluster_idxs,
-        key = lambda i : records[i].blur_score,
-        reverse = True,
+        key=lambda i: records[i].blur_score,
+        reverse=True,
     )
-    
+
     candidate_count = max(1, int(round(len(cluster_sorted) * blur_filter)))
     candidate_idxs = cluster_sorted[:candidate_count]
-    
+
     best_idx: Optional[int] = None
     best_avg = float("inf")
 
@@ -251,10 +247,7 @@ def filtered_medoid(
 
         is_better = (
             avg_dist < best_avg
-            or (
-                avg_dist == best_avg
-                and current.blur_score > best.blur_score
-            )
+            or (avg_dist == best_avg and current.blur_score > best.blur_score)
             or (
                 avg_dist == best_avg
                 and current.blur_score == best.blur_score
@@ -280,49 +273,45 @@ def sample_video(
     linkage: Literal["complete", "average", "single"] = "complete",
 ) -> list[ClusterSample]:
     records = extract_frame_records(
-        video_path = video_path,
-        frame_stride = frame_stride,
-        hash_size = hash_size,
+        video_path=video_path,
+        frame_stride=frame_stride,
+        hash_size=hash_size,
     )
-    
+
     clusters = cluster_phash(
-        records = records,
-        n_samples = n_samples,
-        hamming_threshold = hamming_threshold,
-        linkage = linkage,
+        records=records,
+        n_samples=n_samples,
+        hamming_threshold=hamming_threshold,
+        linkage=linkage,
     )
-    
+
     samples: list[ClusterSample] = []
-    
+
     for cluster_id, cluster_idxs in enumerate(clusters):
         medoid, candidate_count, avg_hamming = filtered_medoid(
-            records = records,
-            cluster_idxs = cluster_idxs,
-            blur_filter = blur_filter,
+            records=records,
+            cluster_idxs=cluster_idxs,
+            blur_filter=blur_filter,
         )
-        
+
         samples.append(
             ClusterSample(
-                cluster_id = cluster_id,
-                selected = medoid,
-                cluster_size = len(cluster_idxs),
-                candidate_count = candidate_count,
-                avg_hamming = avg_hamming,
+                cluster_id=cluster_id,
+                selected=medoid,
+                cluster_size=len(cluster_idxs),
+                candidate_count=candidate_count,
+                avg_hamming=avg_hamming,
             )
         )
-    
+
     # Sort keyframes by order
     samples.sort(key=lambda cs: cs.selected.frame_idx)
-    
+
     return samples
 
 
 def build_manifest_id(video_idx: int, cluster_id: int, frame_idx: int) -> int:
-    return (
-        (video_idx + 1) * int(1e10)
-        + (cluster_id + 1) * int(1e6)
-        + frame_idx
-    )
+    return (video_idx + 1) * int(1e10) + (cluster_id + 1) * int(1e6) + frame_idx
 
 
 def build_output_path(
@@ -387,7 +376,7 @@ def save_samples(
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     manifest_rows: list[dict[str, str]] = []
-    
+
     for sample in samples:
         record = sample.selected
         output_path = build_output_path(
@@ -479,11 +468,16 @@ def resample_from_manifest(
         if not cap.isOpened():
             print(
                 "sample_keyframes_warning",
-                {"video_path": str(video_path), "warning": "Unable to open video. Skipping."},
+                {
+                    "video_path": str(video_path),
+                    "warning": "Unable to open video. Skipping.",
+                },
             )
             continue
 
-        for row_idx, row in sorted(video_rows, key=lambda item: int(item[1]["frame_idx"])):
+        for row_idx, row in sorted(
+            video_rows, key=lambda item: int(item[1]["frame_idx"])
+        ):
             frame_idx = int(row["frame_idx"])
             cluster_id = int(row["cluster_id"])
             output_path_value = row.get("output_path", "")
@@ -500,11 +494,15 @@ def resample_from_manifest(
             cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
             ok, frame = cap.read()
             if not ok:
-                unreadable_frames.append({"video_path": str(video_path), "frame_idx": frame_idx})
+                unreadable_frames.append(
+                    {"video_path": str(video_path), "frame_idx": frame_idx}
+                )
                 continue
 
             if img_ext.lower() in (".jpg", ".jpeg"):
-                cv2.imwrite(str(output_path), frame, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
+                cv2.imwrite(
+                    str(output_path), frame, [int(cv2.IMWRITE_JPEG_QUALITY), 95]
+                )
             else:
                 cv2.imwrite(str(output_path), frame)
 
@@ -525,7 +523,9 @@ def resample_from_manifest(
             },
         )
 
-    ordered_rows = [saved_rows[row_idx] for row_idx in range(len(rows)) if row_idx in saved_rows]
+    ordered_rows = [
+        saved_rows[row_idx] for row_idx in range(len(rows)) if row_idx in saved_rows
+    ]
     write_manifest(ordered_rows, manifest_dir)
     print(
         "sample_keyframes",
@@ -535,14 +535,14 @@ def resample_from_manifest(
             "source_manifest": str(frame_manifest),
         },
     )
-    
-    
+
+
 def main():
     args = parse_args()
     assert not args.video_dir.is_file()
     assert not args.frame_dir.is_file()
     assert not args.manifest_dir.is_file()
-    
+
     if args.frame_manifest is not None:
         resample_from_manifest(
             frame_manifest=args.frame_manifest,
@@ -559,9 +559,12 @@ def main():
         samples = sample_video(video)
         all_samples.extend(samples)
         end = time.perf_counter()
-        print(f"Sampled {len(samples)} frames from {video.name} in {end - start:.1f} seconds")
-    
+        print(
+            f"Sampled {len(samples)} frames from {video.name} in {end - start:.1f} seconds"
+        )
+
     save_samples(all_samples, args.frame_dir, args.manifest_dir)
-    
+
+
 if __name__ == "__main__":
     main()

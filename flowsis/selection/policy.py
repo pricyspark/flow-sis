@@ -13,7 +13,6 @@ from .association import (
 )
 from .types import Box, SelectionResult
 
-
 DetectionLog = Sequence[Mapping[str, Any]]
 
 
@@ -83,7 +82,9 @@ def _match_candidate(
     best_index: int | None = None
     best_score = min_association_score
 
-    for candidate_index, (candidate_box, candidate_label) in enumerate(zip(boxes, labels)):
+    for candidate_index, (candidate_box, candidate_label) in enumerate(
+        zip(boxes, labels)
+    ):
         iou = intersection_over_union(reference_box, candidate_box)
         motion_penalty = normalized_motion(reference_box, candidate_box)
         label_bonus = 0.25 if candidate_label == reference_label else 0.0
@@ -149,7 +150,10 @@ def _build_tracklet_stats(
         reference_box = matched_box
         reference_label = historical_labels[match_index]
 
-    area_scores = [min(box_area(box) / max(box_area(current_box), 1.0), 1.0) for box in matched_boxes]
+    area_scores = [
+        min(box_area(box) / max(box_area(current_box), 1.0), 1.0)
+        for box in matched_boxes
+    ]
     label_matches = [1.0 if label == current_label else 0.0 for label in matched_labels]
 
     return _TrackletStats(
@@ -168,7 +172,9 @@ def _build_tracklet_stats(
     )
 
 
-def _continuity_score(candidate_box: Box, candidate_label: int, previous_selection: SelectionResult) -> float:
+def _continuity_score(
+    candidate_box: Box, candidate_label: int, previous_selection: SelectionResult
+) -> float:
     label_match = 1.0 if candidate_label == previous_selection.label else 0.0
     iou = intersection_over_union(candidate_box, previous_selection.box)
     motion = 1.0 - normalized_motion(candidate_box, previous_selection.box)
@@ -220,7 +226,9 @@ def _score_recurrent_detection(stats: _TrackletStats) -> tuple[float, dict[str, 
 
 
 def _empty_selection_error() -> ValueError:
-    return ValueError("Expected detections_log to contain at least one frame with one detection.")
+    return ValueError(
+        "Expected detections_log to contain at least one frame with one detection."
+    )
 
 
 def select_first_detection(detections_log: DetectionLog) -> SelectionResult:
@@ -246,7 +254,10 @@ def select_first_detection(detections_log: DetectionLog) -> SelectionResult:
             matched_frames=stats.matched_frames,
             score_breakdown=breakdown,
         )
-        if best_result is None or candidate.selection_score > best_result.selection_score:
+        if (
+            best_result is None
+            or candidate.selection_score > best_result.selection_score
+        ):
             best_result = candidate
 
     assert best_result is not None
@@ -272,7 +283,11 @@ def select_recurrant_detection(
     best_result: SelectionResult | None = None
     for current_index in range(len(current_scores)):
         stats = _build_tracklet_stats(detections_log, current_index)
-        continuity = _continuity_score(current_boxes[current_index], current_labels[current_index], previous_selection)
+        continuity = _continuity_score(
+            current_boxes[current_index],
+            current_labels[current_index],
+            previous_selection,
+        )
         stats = replace(stats, continuity=continuity)
         selection_score, breakdown = _score_recurrent_detection(stats)
         candidate = SelectionResult(
@@ -285,7 +300,10 @@ def select_recurrant_detection(
             matched_frames=stats.matched_frames,
             score_breakdown=breakdown,
         )
-        if best_result is None or candidate.selection_score > best_result.selection_score:
+        if (
+            best_result is None
+            or candidate.selection_score > best_result.selection_score
+        ):
             best_result = candidate
 
     assert best_result is not None

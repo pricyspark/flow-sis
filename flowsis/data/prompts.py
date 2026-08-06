@@ -75,12 +75,16 @@ class LabelPrompts:
                 raise ValueError(
                     f"Expected each entry in {input_path} to map a label to a list of prompts"
                 )
-            if not prompt_list or not all(isinstance(prompt, str) for prompt in prompt_list):
-                raise ValueError(f"Prompts for {label!r} must be a non-empty list of strings")
+            if not prompt_list or not all(
+                isinstance(prompt, str) for prompt in prompt_list
+            ):
+                raise ValueError(
+                    f"Prompts for {label!r} must be a non-empty list of strings"
+                )
             label_prompts.prompts[label] = prompt_list
 
         return label_prompts
-    
+
     @staticmethod
     def load_embeddings(
         label: str,
@@ -92,11 +96,15 @@ class LabelPrompts:
         if label not in cache:
             path = directory / f"{label}.pt"
             if not path.exists():
-                raise FileNotFoundError(f"Missing prompt embeddings for detector label {label!r}: {path}")
+                raise FileNotFoundError(
+                    f"Missing prompt embeddings for detector label {label!r}: {path}"
+                )
             embeddings = torch.load(path, map_location="cpu", weights_only=False)
             if not isinstance(embeddings, torch.Tensor) or embeddings.ndim != 2:
                 shape = getattr(embeddings, "shape", None)
-                raise ValueError(f"Expected prompt embeddings shaped [P,D] at {path}, got {shape}.")
+                raise ValueError(
+                    f"Expected prompt embeddings shaped [P,D] at {path}, got {shape}."
+                )
             cache[label] = embeddings.float()
         # Tensor.to is a no-op when the cached tensor is already on the target
         # device, and migrates it if the caller moved the model since caching.
@@ -151,5 +159,7 @@ class LabelPrompts:
         for label, embedding in self.embeddings.items():
             output_path = embedding_dir / f"{label}.pt"
             if output_path.parent != embedding_dir:
-                raise ValueError(f"Label {label!r} cannot be used as an embedding filename")
+                raise ValueError(
+                    f"Label {label!r} cannot be used as an embedding filename"
+                )
             torch.save(embedding.cpu(), output_path)

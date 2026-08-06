@@ -222,7 +222,9 @@ class BaseFusionHead(nn.Module):
         mask_head_hidden_dim: int | None = None,
         mask_output_dim: int = 1,
         mask_upsample_scales: tuple[int, ...] = (2, 2),
-        mask_convolution: Literal["standard", "depthwise_separable"] = "depthwise_separable",
+        mask_convolution: Literal[
+            "standard", "depthwise_separable"
+        ] = "depthwise_separable",
     ) -> None:
         super().__init__()
 
@@ -279,7 +281,11 @@ class BaseFusionHead(nn.Module):
         self.mask_head = MaskHead(
             image_dim=decode_embed_dim,
             text_dim=text_dim,
-            hidden_dim=mask_head_hidden_dim if mask_head_hidden_dim is not None else aggregator_dim,
+            hidden_dim=(
+                mask_head_hidden_dim
+                if mask_head_hidden_dim is not None
+                else aggregator_dim
+            ),
             output_dim=mask_output_dim,
             upsample_scales=mask_upsample_scales,
             dropout=dropout,
@@ -297,8 +303,12 @@ class BaseFusionHead(nn.Module):
         width: int,
     ) -> torch.Tensor:
         if boxes.ndim != 2 or boxes.shape[1] != 4:
-            raise ValueError(f"Expected normalized boxes shaped [B,4], got {tuple(boxes.shape)}.")
-        y = (torch.arange(height, device=boxes.device, dtype=boxes.dtype) + 0.5) / height
+            raise ValueError(
+                f"Expected normalized boxes shaped [B,4], got {tuple(boxes.shape)}."
+            )
+        y = (
+            torch.arange(height, device=boxes.device, dtype=boxes.dtype) + 0.5
+        ) / height
         x = (torch.arange(width, device=boxes.device, dtype=boxes.dtype) + 0.5) / width
         inside_y = (y[None, :, None] >= boxes[:, 1, None, None]) & (
             y[None, :, None] <= boxes[:, 3, None, None]
@@ -340,10 +350,14 @@ class BaseFusionHead(nn.Module):
             # by one half at initialization.
             channel_modulation = 2.0 * ChannelAggregator.compute_gates(channel_logits)
         else:
-            channel_modulation = ChannelAggregator.compute_weights(channel_logits, dim=-1)
+            channel_modulation = ChannelAggregator.compute_weights(
+                channel_logits, dim=-1
+            )
             channel_modulation = channel_modulation * channel_modulation.shape[-1]
 
-        modulated_features = image_features * channel_modulation.unsqueeze(-1).unsqueeze(-1)
+        modulated_features = image_features * channel_modulation.unsqueeze(
+            -1
+        ).unsqueeze(-1)
         return modulated_features, channel_logits, channel_modulation
 
     def forward(
@@ -371,10 +385,12 @@ class BaseFusionHead(nn.Module):
                 width=mask_features.shape[-1],
             )
             mask_features = mask_features + self.box_projection(box_masks)
-        modulated_features, channel_logits, channel_modulation = self._apply_channel_aggregation(
-            mask_features,
-            text_embeddings,
-            text_padding_mask=text_padding_mask,
+        modulated_features, channel_logits, channel_modulation = (
+            self._apply_channel_aggregation(
+                mask_features,
+                text_embeddings,
+                text_padding_mask=text_padding_mask,
+            )
         )
         mask_logits = self.mask_head(
             modulated_features,
@@ -391,12 +407,14 @@ class BaseFusionHead(nn.Module):
         }
         if not return_intermediates:
             return outputs
-        outputs.update({
-            "fused_feature_list": fused_feature_list,
-            "merged_features": merged_features,
-            "mask_features": mask_features,
-            "modulated_features": modulated_features,
-            "channel_logits": channel_logits,
-            "channel_modulation": channel_modulation,
-        })
+        outputs.update(
+            {
+                "fused_feature_list": fused_feature_list,
+                "merged_features": merged_features,
+                "mask_features": mask_features,
+                "modulated_features": modulated_features,
+                "channel_logits": channel_logits,
+                "channel_modulation": channel_modulation,
+            }
+        )
         return outputs

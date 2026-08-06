@@ -9,7 +9,6 @@ import torch
 
 from flowsis.artifacts import atomic_torch_save
 
-
 HEAD_CHECKPOINT_FILE = "head.pt"
 HEAD_CHECKPOINT_VERSION = 1
 HEAD_ARCHITECTURE = "base_fusion_head"
@@ -92,9 +91,7 @@ def resolve_head_checkpoint(path: str | Path) -> Path:
         key=lambda checkpoint: int(checkpoint.name.removeprefix("checkpoint-")),
         reverse=True,
     )
-    candidates.extend(
-        checkpoint / HEAD_CHECKPOINT_FILE for checkpoint in checkpoints
-    )
+    candidates.extend(checkpoint / HEAD_CHECKPOINT_FILE for checkpoint in checkpoints)
     for candidate in candidates:
         if candidate.exists():
             return candidate

@@ -5,10 +5,10 @@ from typing import Literal
 from flowsis.utils import resolve_activation
 from .shape import to_image_tokens, to_image_grid
 from .window import (
-    pad_to_window_size, 
-    partition_padded_windows, 
-    build_shifted_window_attention_mask, 
-    build_padding_attention_mask, 
+    pad_to_window_size,
+    partition_padded_windows,
+    build_shifted_window_attention_mask,
+    build_padding_attention_mask,
     merge_padded_windows,
 )
 
@@ -23,7 +23,7 @@ class ImageTextFusionBlock(nn.Module):
 
     def __init__(
         self,
-        image_dim: int, # (B,HW,C)
+        image_dim: int,  # (B,HW,C)
         text_dim: int,
         nhead: int,
         ffn_dim: int = 2048,
@@ -34,7 +34,7 @@ class ImageTextFusionBlock(nn.Module):
         activation: Literal["gelu", "relu"] = "gelu",
     ) -> None:
         super().__init__()
-        
+
         # TODO: maybe add embed_dim param to reduce the number of
         # channels within each attention head.
 
@@ -51,7 +51,9 @@ class ImageTextFusionBlock(nn.Module):
                 f"but received {image_self_attention!r}."
             )
         if window_size <= 0:
-            raise ValueError(f"window_size must be positive, but received {window_size}.")
+            raise ValueError(
+                f"window_size must be positive, but received {window_size}."
+            )
         if not 0 <= window_shift_size < window_size:
             raise ValueError(
                 "window_shift_size must satisfy 0 <= window_shift_size < window_size, "
@@ -74,7 +76,7 @@ class ImageTextFusionBlock(nn.Module):
             num_heads=nhead,
             dropout=dropout,
             batch_first=True,
-            kdim=text_dim, # TODO:
+            kdim=text_dim,  # TODO:
             vdim=text_dim,
         )
 
@@ -137,16 +139,24 @@ class ImageTextFusionBlock(nn.Module):
 
         if positional_encoding is not None:
             height, width = spatial_shape
-            positional_grid = positional_encoding.reshape(1, height, width, -1).permute(0, 3, 1, 2)
-            positional_grid = positional_grid.expand(normalized_image_grid.shape[0], -1, -1, -1)
-            positional_grid, _, _ = pad_to_window_size(positional_grid, self.window_size)
+            positional_grid = positional_encoding.reshape(1, height, width, -1).permute(
+                0, 3, 1, 2
+            )
+            positional_grid = positional_grid.expand(
+                normalized_image_grid.shape[0], -1, -1, -1
+            )
+            positional_grid, _, _ = pad_to_window_size(
+                positional_grid, self.window_size
+            )
             if shift_size > 0:
                 positional_grid = torch.roll(
                     positional_grid,
                     shifts=(-shift_size, -shift_size),
                     dims=(-2, -1),
                 )
-            positional_windows = partition_padded_windows(positional_grid, self.window_size)
+            positional_windows = partition_padded_windows(
+                positional_grid, self.window_size
+            )
             image_queries = image_queries + positional_windows
             image_keys = image_keys + positional_windows
 
@@ -182,7 +192,7 @@ class ImageTextFusionBlock(nn.Module):
 
     def forward(
         self,
-        image_features: torch.Tensor,   # (B,C,H,W)
+        image_features: torch.Tensor,  # (B,C,H,W)
         text_embeddings: torch.Tensor,
         text_padding_mask: torch.Tensor | None = None,
         *,
@@ -228,7 +238,7 @@ class ImageTextFusionBlock(nn.Module):
         cross_attention_output, _ = self.cross_attention(
             image_cross_attn_query,
             normalized_text,
-            normalized_text, # TODO: why is text the value and not image
+            normalized_text,  # TODO: why is text the value and not image
             key_padding_mask=text_padding_mask,
             need_weights=False,
         )

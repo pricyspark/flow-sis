@@ -8,7 +8,6 @@ from datasets import ClassLabel, Dataset, DatasetDict, Features, Sequence, Value
 
 from flowsis.utils import load_classes
 
-
 DEFAULT_MANIFEST_PATH = Path("data/manifests/frame_manifest.csv")
 DEFAULT_BOXES_DIR = Path("data/bboxes")
 DEFAULT_CLASSES_PATH = Path("data/manifests/classes.json")
@@ -17,7 +16,7 @@ DEFAULT_OUTPUT_PATH = Path("data/dataset")
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description = "Build the Hugging Face detection dataset used by FlowSIS.",
+        description="Build the Hugging Face detection dataset used by FlowSIS.",
     )
     parser.add_argument("--manifest-path", type=Path, default=DEFAULT_MANIFEST_PATH)
     parser.add_argument("--boxes-dir", type=Path, default=DEFAULT_BOXES_DIR)
@@ -60,7 +59,7 @@ def build_dataset(
         reader = csv.DictReader(file)
         for row in reader:
             video_id = row["video_id"]
-            
+
             if video_id in bboxes:
                 video_boxes = bboxes[video_id]
             else:
@@ -103,7 +102,9 @@ def build_dataset(
             bbox_id += 1
 
     if not rows:
-        raise ValueError("No dataset rows were created. Check the manifest, boxes directory, and class mappings.")
+        raise ValueError(
+            "No dataset rows were created. Check the manifest, boxes directory, and class mappings."
+        )
 
     category_names = [id2label[idx] for idx in range(len(id2label))]
     features = Features(

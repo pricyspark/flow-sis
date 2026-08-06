@@ -13,7 +13,9 @@ from flowsis.utils import get_device
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Profile FlowSIS base-head components.")
+    parser = argparse.ArgumentParser(
+        description="Profile FlowSIS base-head components."
+    )
     parser.add_argument("--preset", choices=("speed", "original"), default="speed")
     parser.add_argument("--device", default=None)
     parser.add_argument("--batch-size", type=int, default=1)
@@ -29,29 +31,33 @@ def parse_args() -> argparse.Namespace:
 
 def build_head(preset: str, device: torch.device) -> BaseFusionHead:
     speed = preset == "speed"
-    return BaseFusionHead(
-        num_decode_layers=1 if speed else 2,
-        decode_embed_dim=128 if speed else 256,
-        image_dim=256,
-        text_dim=768,
-        nhead=8,
-        decode_ffn_dim=512 if speed else 1024,
-        dropout=0.1,
-        activation="gelu",
-        num_feature_levels=3,
-        decode_pos_encode="first",
-        image_self_attention="WINDOW",
-        decode_window_size=8,
-        use_shifted_windows=True,
-        multiscale_merge="conv",
-        deformable_num_points=4,
-        deformable_offset_scale=2.0,
-        conv_merge_refinement="depthwise" if speed else "standard",
-        channel_aggregation="none" if speed else "sigmoid",
-        mask_feature_source="merged",
-        mask_output_dim=1,
-        mask_convolution="depthwise_separable" if speed else "standard",
-    ).eval().to(device)
+    return (
+        BaseFusionHead(
+            num_decode_layers=1 if speed else 2,
+            decode_embed_dim=128 if speed else 256,
+            image_dim=256,
+            text_dim=768,
+            nhead=8,
+            decode_ffn_dim=512 if speed else 1024,
+            dropout=0.1,
+            activation="gelu",
+            num_feature_levels=3,
+            decode_pos_encode="first",
+            image_self_attention="WINDOW",
+            decode_window_size=8,
+            use_shifted_windows=True,
+            multiscale_merge="conv",
+            deformable_num_points=4,
+            deformable_offset_scale=2.0,
+            conv_merge_refinement="depthwise" if speed else "standard",
+            channel_aggregation="none" if speed else "sigmoid",
+            mask_feature_source="merged",
+            mask_output_dim=1,
+            mask_convolution="depthwise_separable" if speed else "standard",
+        )
+        .eval()
+        .to(device)
+    )
 
 
 def synchronize(device: torch.device) -> None:

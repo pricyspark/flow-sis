@@ -15,18 +15,18 @@ def set_seed(seed: int) -> None:
         torch.cuda.manual_seed_all(seed)
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
-        
+
 
 def init_rng(
     rng: np.random.Generator | None = None,
     seed: int | None = None,
-) -> np.random.Generator:    
+) -> np.random.Generator:
     if rng is not None and seed is not None:
         raise ValueError("Pass either 'rng' or 'seed', not both.")
-    
+
     if rng is None:
         rng = np.random.default_rng(seed)
-        
+
     return rng
 
 
@@ -47,6 +47,7 @@ def load_classes(
     vid2label, label2id, raw_id2label = classes
     id2label = {int(key): value for key, value in raw_id2label.items()}
     return vid2label, label2id, id2label
+
 
 def resolve_activation(activation: Literal["gelu", "relu"]) -> nn.Module:
     if activation == "gelu":

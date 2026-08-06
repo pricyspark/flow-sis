@@ -13,7 +13,6 @@ from flowsis.cli.deploy.common import center_square, resolve_video_source
 from flowsis.pretrained import load_detector
 from flowsis.utils import get_device
 
-
 WINDOW_NAME = "FlowSIS Detector Live Inference"
 BOX_COLORS = [
     (255, 90, 95),
@@ -91,9 +90,7 @@ def draw_detections(
     inference_ms: float,
 ) -> Any:
     rendered = frame_bgr.copy()
-    cpu = {
-        key: value.detach().cpu().tolist() for key, value in detections.items()
-    }
+    cpu = {key: value.detach().cpu().tolist() for key, value in detections.items()}
     for box, score, label_id in zip(
         cpu["boxes"],
         cpu["scores"],

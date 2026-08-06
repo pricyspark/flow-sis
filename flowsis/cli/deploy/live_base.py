@@ -13,7 +13,6 @@ from flowsis.cli.common import add_detector_arguments
 from flowsis.cli.deploy.common import center_square, resolve_video_source
 from flowsis.selection import SelectionResult
 
-
 WINDOW_NAME = "FlowSIS Live Inference"
 
 
@@ -69,7 +68,9 @@ def render_result(
         if cv2.countNonZero(mask):
             overlay = np.empty_like(rendered)
             overlay[:] = (0, 220, 0)
-            blended = cv2.addWeighted(rendered, 1.0 - mask_alpha, overlay, mask_alpha, 0.0)
+            blended = cv2.addWeighted(
+                rendered, 1.0 - mask_alpha, overlay, mask_alpha, 0.0
+            )
             cv2.copyTo(blended, mask, rendered)
 
     if selection is not None:
@@ -201,7 +202,10 @@ def main() -> None:
         if not args.no_display:
             cv2.destroyAllWindows()
 
-    print("live_base_complete", {"frames": frame_count, "output_path": str(args.output_path)})
+    print(
+        "live_base_complete",
+        {"frames": frame_count, "output_path": str(args.output_path)},
+    )
 
 
 if __name__ == "__main__":

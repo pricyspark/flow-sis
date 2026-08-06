@@ -15,5 +15,5 @@ __all__ = [
     "rotation_augment",
     "center_square_augment",
     "random_square_augment",
-    "AugmentationStep"
+    "AugmentationStep",
 ]

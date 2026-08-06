@@ -115,7 +115,9 @@ def build_shifted_window_attention_mask(
         )
 
     padded_height, padded_width = padded_shape
-    image_mask = torch.zeros((1, padded_height, padded_width, 1), device=device, dtype=torch.float32)
+    image_mask = torch.zeros(
+        (1, padded_height, padded_width, 1), device=device, dtype=torch.float32
+    )
     height_slices = (
         slice(0, -window_size),
         slice(-window_size, -shift_size),
@@ -149,7 +151,9 @@ def build_padding_attention_mask(
     original_height, original_width = original_shape
     padded_height, padded_width = padded_shape
 
-    valid = torch.zeros((1, 1, padded_height, padded_width), device=device, dtype=torch.bool)
+    valid = torch.zeros(
+        (1, 1, padded_height, padded_width), device=device, dtype=torch.bool
+    )
     valid[..., :original_height, :original_width] = True
 
     if shift_size > 0:
@@ -159,7 +163,9 @@ def build_padding_attention_mask(
             dims=(-2, -1),
         )
 
-    valid_windows = partition_padded_windows(valid.float(), window_size).squeeze(-1).bool()
+    valid_windows = (
+        partition_padded_windows(valid.float(), window_size).squeeze(-1).bool()
+    )
     # [num_windows, L]
 
     invalid_keys = ~valid_windows.unsqueeze(1)

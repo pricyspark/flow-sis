@@ -36,9 +36,7 @@ class RTDetrV2Detector(BaseDetector):
         if num_labels is not None:
             config.num_labels = int(num_labels)
             if id2label is None:
-                id2label = {
-                    index: f"class_{index}" for index in range(num_labels)
-                }
+                id2label = {index: f"class_{index}" for index in range(num_labels)}
             if label2id is None:
                 label2id = {label: index for index, label in id2label.items()}
             config.id2label = id2label

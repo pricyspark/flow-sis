@@ -100,7 +100,9 @@ def build_cost_matrix(
     max_area_change: float,
     label_mismatch_cost: float,
 ) -> np.ndarray:
-    cost_matrix = np.full((len(tracks), len(detections)), fill_value=np.inf, dtype=np.float64)
+    cost_matrix = np.full(
+        (len(tracks), len(detections)), fill_value=np.inf, dtype=np.float64
+    )
     for track_index, track in enumerate(tracks):
         for detection_index, detection in enumerate(detections):
             cost = gated_cost(
@@ -142,14 +144,19 @@ def assign_detections(
     matched_tracks: set[int] = set()
     matched_detections: set[int] = set()
 
-    for track_index, detection_index in zip(row_ind.tolist(), col_ind.tolist(), strict=True):
+    for track_index, detection_index in zip(
+        row_ind.tolist(), col_ind.tolist(), strict=True
+    ):
         if not np.isfinite(cost_matrix[track_index, detection_index]):
             continue
         matches.append((track_index, detection_index))
         matched_tracks.add(track_index)
         matched_detections.add(detection_index)
 
-    unmatched_tracks = [index for index in range(len(tracks)) if index not in matched_tracks]
-    unmatched_detections = [index for index in range(len(detections)) if index not in matched_detections]
+    unmatched_tracks = [
+        index for index in range(len(tracks)) if index not in matched_tracks
+    ]
+    unmatched_detections = [
+        index for index in range(len(detections)) if index not in matched_detections
+    ]
     return matches, unmatched_tracks, unmatched_detections
-

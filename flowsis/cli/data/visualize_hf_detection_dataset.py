@@ -8,7 +8,6 @@ from datasets import ClassLabel, Dataset, DatasetDict, load_from_disk
 from flowsis.data.images import get_image
 from flowsis.data.object_records import get_object_feature_schema, get_object_records
 
-
 DEFAULT_DATASET_PATH = Path("data/dataset")
 DEFAULT_OUTPUT_DIR = Path("outputs/dataset_visualization")
 
@@ -42,7 +41,9 @@ def load_split(dataset_path: Path, split_name: str) -> tuple[Dataset, dict[int, 
     if not isinstance(dataset, DatasetDict):
         raise TypeError("Expected a dataset with named splits.")
     if split_name not in dataset:
-        raise KeyError(f"Split '{split_name}' not found in dataset. Available: {list(dataset.keys())}")
+        raise KeyError(
+            f"Split '{split_name}' not found in dataset. Available: {list(dataset.keys())}"
+        )
 
     split = dataset[split_name]
     object_schema = get_object_feature_schema(split.features["objects"])
@@ -56,7 +57,9 @@ def load_split(dataset_path: Path, split_name: str) -> tuple[Dataset, dict[int, 
     return split, id2label
 
 
-def select_indices(length: int, *, num_samples: int, shuffle: bool, seed: int) -> list[int]:
+def select_indices(
+    length: int, *, num_samples: int, shuffle: bool, seed: int
+) -> list[int]:
     indices = list(range(length))
     if shuffle:
         random.Random(seed).shuffle(indices)
@@ -87,7 +90,9 @@ def draw_example(example: dict, *, id2label: dict[int, str]) -> Image.Image:
         y2 = min(float(canvas.height), y + height)
         color = colors[index % len(colors)]
 
-        draw.rectangle((x1, y1, x2, y2), outline=color, width=max(2, canvas.width // 300))
+        draw.rectangle(
+            (x1, y1, x2, y2), outline=color, width=max(2, canvas.width // 300)
+        )
 
         category_id = int(object_record["category"])
         label = id2label.get(category_id, str(category_id))
@@ -134,7 +139,9 @@ def make_contact_sheet(images: list[Image.Image], *, cell_size: int) -> Image.Im
 
     columns = math.ceil(math.sqrt(len(images)))
     rows = math.ceil(len(images) / columns)
-    sheet = Image.new("RGB", (columns * cell_size, rows * cell_size), color=(24, 24, 24))
+    sheet = Image.new(
+        "RGB", (columns * cell_size, rows * cell_size), color=(24, 24, 24)
+    )
 
     for index, image in enumerate(images):
         tile = image.copy()
@@ -149,7 +156,9 @@ def make_contact_sheet(images: list[Image.Image], *, cell_size: int) -> Image.Im
 def main() -> None:
     args = parse_args()
     split, id2label = load_split(args.dataset_path, args.split)
-    indices = select_indices(len(split), num_samples=args.num_samples, shuffle=args.shuffle, seed=args.seed)
+    indices = select_indices(
+        len(split), num_samples=args.num_samples, shuffle=args.shuffle, seed=args.seed
+    )
     if not indices:
         raise ValueError(
             f"No samples selected from split '{args.split}'. "
@@ -164,7 +173,10 @@ def main() -> None:
         rendered = draw_example(example, id2label=id2label)
         rendered_images.append(rendered)
 
-        output_path = args.output_dir / f"{args.split}_{dataset_index:05d}_image_{int(example['image_id']):06d}.jpg"
+        output_path = (
+            args.output_dir
+            / f"{args.split}_{dataset_index:05d}_image_{int(example['image_id']):06d}.jpg"
+        )
         rendered.save(output_path, quality=95)
 
     contact_sheet = make_contact_sheet(rendered_images, cell_size=args.cell_size)

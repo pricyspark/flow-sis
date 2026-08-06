@@ -55,4 +55,3 @@ class Track:
     last_detection_index: int | None
     score_ema: float
     history: tuple[TrackDetection, ...]
-

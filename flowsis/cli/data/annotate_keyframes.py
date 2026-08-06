@@ -11,7 +11,6 @@ from transformers import Sam3VideoModel, Sam3VideoProcessor
 from flowsis.data.masks import mask2xywh
 from flowsis.utils import get_device
 
-
 IMAGE_EXTENSIONS = Image.registered_extensions().keys()
 
 
@@ -24,8 +23,8 @@ class SessionConfig:
     out_mask_dir: Path | None = None
     out_bbox_dir: Path | None = None
     device: torch.device = torch.device("cpu")
-    
-    
+
+
 @dataclass
 class AnnotationJob:
     video_path: Path
@@ -74,7 +73,7 @@ def collect_session_config() -> SessionConfig:
     print(f"Using device {device}")
     model = Sam3VideoModel.from_pretrained("facebook/sam3", device_map=device)
     processor = Sam3VideoProcessor.from_pretrained("facebook/sam3")
-    
+
     print("\nSession setup")
     print("Leave optional values blank if you want to enter them per video.\n")
 
@@ -88,12 +87,16 @@ def collect_session_config() -> SessionConfig:
         processor=processor,
         video_dir=Path(video_dir_raw).expanduser().resolve() if video_dir_raw else None,
         text_prompt=text_prompt,
-        out_mask_dir=Path(out_mask_dir_raw).expanduser().resolve() if out_mask_dir_raw else None,
-        out_bbox_dir=Path(out_bbox_dir_raw).expanduser().resolve() if out_bbox_dir_raw else None,
+        out_mask_dir=(
+            Path(out_mask_dir_raw).expanduser().resolve() if out_mask_dir_raw else None
+        ),
+        out_bbox_dir=(
+            Path(out_bbox_dir_raw).expanduser().resolve() if out_bbox_dir_raw else None
+        ),
         device=device,
     )
-    
-    
+
+
 def collect_job(config: SessionConfig) -> AnnotationJob | None:
     print("\nNew annotation job")
     print("Enter 'q' to quit.\n")
@@ -105,11 +108,11 @@ def collect_job(config: SessionConfig) -> AnnotationJob | None:
 
     video_path = resolve_video_path(video_input, config.video_dir)
 
-    text_prompt = prompt_required( # TODO: this isn't actually required if default text prompt is set
+    text_prompt = prompt_required(  # TODO: this isn't actually required if default text prompt is set
         "Text prompt",
         config.text_prompt,
     )
-    
+
     out_mask_dir_raw = prompt_required(
         "Output mask directory",
         str(config.out_mask_dir) if config.out_mask_dir else None,
@@ -141,11 +144,11 @@ def collect_job(config: SessionConfig) -> AnnotationJob | None:
 def validate_job(job: AnnotationJob) -> None:
     job.out_bbox_dir.mkdir(parents=True, exist_ok=True)
     job.out_mask_dir.mkdir(parents=True, exist_ok=True)
-    
+
 
 def annotate_video(
-    model: Sam3VideoModel, 
-    processor: Sam3VideoProcessor, 
+    model: Sam3VideoModel,
+    processor: Sam3VideoProcessor,
     job: AnnotationJob,
 ) -> dict:
     print("\nRunning annotation")
@@ -153,7 +156,7 @@ def annotate_video(
     print(f"Text prompt:  {job.text_prompt}")
     print(f"Mask dir:     {job.out_mask_dir}")
     print(f"Bbox dir:     {job.out_bbox_dir}")
-    
+
     inference_session = processor.init_video_session(
         video=job.tensor,
         inference_device=job.device,
@@ -165,16 +168,18 @@ def annotate_video(
         inference_session=inference_session,
         text=job.text_prompt,
     )
-    
+
     outputs_per_frame = {}
     # Pass show_progress_bar=True to display a tqdm progress bar.
     for model_outputs in model.propagate_in_video_iterator(
         inference_session=inference_session,
         show_progress_bar=True,
     ):
-        processed_outputs = processor.postprocess_outputs(inference_session, model_outputs)
+        processed_outputs = processor.postprocess_outputs(
+            inference_session, model_outputs
+        )
         outputs_per_frame[model_outputs.frame_idx] = processed_outputs
-        
+
     return outputs_per_frame
 
 
@@ -197,7 +202,9 @@ def extract_output_masks(output: dict | None) -> np.ndarray:
     if masks.ndim == 2:
         masks = masks[np.newaxis, ...]
     if masks.ndim != 3:
-        raise ValueError(f"Expected masks with shape (N, H, W), received {masks.shape}.")
+        raise ValueError(
+            f"Expected masks with shape (N, H, W), received {masks.shape}."
+        )
 
     return masks.astype(np.bool_, copy=False)
 
@@ -244,13 +251,13 @@ def parse_frame_number(frame_path: Path) -> int:
 def yes_no(prompt) -> bool:
     while True:
         response = input(prompt).strip().lower()
-        
+
         if response in {"", "y", "yes"}:
             return True
-        
+
         if response in {"n", "no"}:
             return False
-        
+
         print("Please enter y or n.")
 
 
@@ -265,7 +272,9 @@ def run_session() -> None:
                 break
 
             outputs_per_frame = annotate_video(config.model, config.processor, job)
-            empty_frames, multi_mask_frames = summarize_outputs(outputs_per_frame, len(job.keyframes))
+            empty_frames, multi_mask_frames = summarize_outputs(
+                outputs_per_frame, len(job.keyframes)
+            )
             print(
                 "annotation_summary",
                 {
@@ -275,7 +284,7 @@ def run_session() -> None:
                 },
             )
             tile_masks(outputs_per_frame, job.tensor, 5, frame_paths=job.keyframes)
-            
+
             save = yes_no("\nSave? [Y/n]: ")
             if save:
                 all_boxes = np.zeros((len(job.keyframes), 4), dtype=np.int64)
@@ -289,14 +298,14 @@ def run_session() -> None:
                     print(f"mask location {job.out_mask_dir / f"{frame_idx}.npz"}")
                     job.out_bbox_dir.mkdir(parents=True, exist_ok=True)
                     save_binary(
-                        job.out_mask_dir / f"{frame_idx}.npz", 
+                        job.out_mask_dir / f"{frame_idx}.npz",
                         mask,
                     )
                     all_boxes[i] = xywh
-                    
+
                 print(f"box location {job.out_bbox_dir / f"{job.video_path.stem}.npy"}")
                 np.save(job.out_bbox_dir / f"{job.video_path.stem}.npy", all_boxes)
-                
+
             again = yes_no("\nAnnotate another video? [Y/n]: ")
             if not again:
                 print("Exiting.")
@@ -309,7 +318,7 @@ def run_session() -> None:
             if not retry:
                 print("Exiting.")
                 break
-            
+
 
 def show_mask(mask, ax, obj_id=None, random_color=False):
     mask = np.asarray(mask, dtype=np.bool_)
@@ -353,11 +362,15 @@ def resize_image_for_display(image: np.ndarray, max_size: int) -> np.ndarray:
     resized_width = max(1, int(round(width * scale)))
     resized_height = max(1, int(round(height * scale)))
     return np.asarray(
-        Image.fromarray(image).resize((resized_width, resized_height), resample=Image.Resampling.BILINEAR)
+        Image.fromarray(image).resize(
+            (resized_width, resized_height), resample=Image.Resampling.BILINEAR
+        )
     )
 
 
-def resize_masks_for_display(masks: np.ndarray, image_shape: tuple[int, int]) -> np.ndarray:
+def resize_masks_for_display(
+    masks: np.ndarray, image_shape: tuple[int, int]
+) -> np.ndarray:
     if len(masks) == 0:
         height, width = image_shape
         return np.zeros((0, height, width), dtype=np.bool_)
@@ -365,7 +378,9 @@ def resize_masks_for_display(masks: np.ndarray, image_shape: tuple[int, int]) ->
     resized_masks = []
     for mask in masks:
         mask_image = Image.fromarray(mask.astype(np.uint8, copy=False) * 255)
-        resized_mask = mask_image.resize((image_shape[1], image_shape[0]), resample=Image.Resampling.NEAREST)
+        resized_mask = mask_image.resize(
+            (image_shape[1], image_shape[0]), resample=Image.Resampling.NEAREST
+        )
         resized_masks.append(np.asarray(resized_mask) > 0)
     return np.stack(resized_masks, axis=0)
 
@@ -430,13 +445,15 @@ def tile_masks(
     max_rows_per_figure: int = 4,
 ):
     plt.close("all")
-    
+
     num_frames = int(keyframe_batch.shape[0])
     if num_frames == 0:
         return
 
     frames_per_figure = max(1, n_cols * max_rows_per_figure)
-    sample_image = resize_image_for_display(keyframe_batch[0].cpu().numpy(), max_frame_size)
+    sample_image = resize_image_for_display(
+        keyframe_batch[0].cpu().numpy(), max_frame_size
+    )
     sample_height, sample_width = sample_image.shape[:2]
     tile_width = 2.4
     tile_height = max(1.8, tile_width * (sample_height / sample_width))
@@ -451,7 +468,9 @@ def tile_masks(
             figsize=(n_cols * tile_width, n_rows * tile_height),
             squeeze=False,
         )
-        fig.subplots_adjust(left=0.02, right=0.98, top=0.98, bottom=0.02, wspace=0.04, hspace=0.08)
+        fig.subplots_adjust(
+            left=0.02, right=0.98, top=0.98, bottom=0.02, wspace=0.04, hspace=0.08
+        )
 
         axes_flat = axes.ravel()
         for page_offset, ax in enumerate(axes_flat):
@@ -470,22 +489,21 @@ def tile_masks(
             )
 
         plt.show()
-    
+
+
 def save_binary(path, arr):
     if arr.dtype != np.bool_:
         raise TypeError
-    
+
     packed = np.packbits(arr.ravel())
     np.savez_compressed(path, packed=packed, shape=arr.shape)
-    
+
+
 def get_keyframes(dir: Path):
-    keyframes = [
-        file
-        for file in dir.iterdir()
-        if file.suffix in IMAGE_EXTENSIONS
-    ]
+    keyframes = [file for file in dir.iterdir() if file.suffix in IMAGE_EXTENSIONS]
     keyframes.sort(key=lambda path: path.stem.partition("_c")[0])
     return keyframes
+
 
 def load_keyframes(keyframes):
     imgs = []
@@ -496,8 +514,10 @@ def load_keyframes(keyframes):
     batch = np.stack(imgs, axis=0)
     return batch
 
+
 def main():
     run_session()
-    
+
+
 if __name__ == "__main__":
     main()

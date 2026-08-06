@@ -9,6 +9,7 @@ from .fusion_block import ImageTextFusionBlock
 from .deformable import TextGuidedDeformableFusion
 from .shape import validate_feature_list
 
+
 class ImageTextFusion(nn.Module):
     """
     Stack multiple image/text fusion blocks and optionally merge scales.
@@ -44,9 +45,11 @@ class ImageTextFusion(nn.Module):
         self.feature_dim = int(embed_dim)
         self.input_projections = nn.ModuleList(
             [
-                nn.Identity()
-                if self.input_dim == self.feature_dim
-                else nn.Conv2d(self.input_dim, self.feature_dim, kernel_size=1)
+                (
+                    nn.Identity()
+                    if self.input_dim == self.feature_dim
+                    else nn.Conv2d(self.input_dim, self.feature_dim, kernel_size=1)
+                )
                 for _ in range(self.num_feature_levels)
             ]
         )
@@ -56,9 +59,7 @@ class ImageTextFusion(nn.Module):
                 f"but received {multiscale_merge!r}."
             )
         if conv_merge_refinement not in {"standard", "depthwise"}:
-            raise ValueError(
-                "conv_merge_refinement must be 'standard' or 'depthwise'."
-            )
+            raise ValueError("conv_merge_refinement must be 'standard' or 'depthwise'.")
 
         self.blocks = nn.ModuleList(
             [
@@ -71,7 +72,9 @@ class ImageTextFusion(nn.Module):
                     window_size=window_size,
                     window_shift_size=(
                         window_size // 2
-                        if use_shifted_windows and image_self_attention == "WINDOW" and layer_index % 2 == 1
+                        if use_shifted_windows
+                        and image_self_attention == "WINDOW"
+                        and layer_index % 2 == 1
                         else 0
                     ),
                     dropout=dropout,
@@ -122,7 +125,7 @@ class ImageTextFusion(nn.Module):
 
     def _fuse_single_scale(
         self,
-        image_features: torch.Tensor,   # (B,C,H,W)
+        image_features: torch.Tensor,  # (B,C,H,W)
         text_embeddings: torch.Tensor,
         text_padding_mask: torch.Tensor | None = None,
         *,
@@ -140,10 +143,12 @@ class ImageTextFusion(nn.Module):
                 f"Expected {self.input_dim} input channels, but received "
                 f"{image_features.shape[1]} at feature level {level_index}."
             )
-        fused_features = self.input_projections[level_index](image_features) + level_bias
+        fused_features = (
+            self.input_projections[level_index](image_features) + level_bias
+        )
         for block_index, block in enumerate(self.blocks):
             add_positional_encoding = (
-                block_index == self.pos_encode_blocks 
+                block_index == self.pos_encode_blocks
                 or self.pos_encode_blocks == float("inf")
             )
             fused_features = block(
@@ -154,9 +159,13 @@ class ImageTextFusion(nn.Module):
             )
         return fused_features
 
-    def _merge_multiscale_features(self, feature_list: Iterable[torch.Tensor]) -> torch.Tensor:
+    def _merge_multiscale_features(
+        self, feature_list: Iterable[torch.Tensor]
+    ) -> torch.Tensor:
         if self.level_fuse is None:
-            raise RuntimeError("Conv multiscale fusion is not enabled for this decoder.")
+            raise RuntimeError(
+                "Conv multiscale fusion is not enabled for this decoder."
+            )
 
         validated_features = validate_feature_list(feature_list)
         if len(validated_features) != self.num_feature_levels:
@@ -177,8 +186,8 @@ class ImageTextFusion(nn.Module):
                 )
             )
 
-        merged_features = torch.cat(resized_features, dim=1) # (B,C*3,H,W)
-        return self.level_fuse(merged_features) # (B,C,H,W)
+        merged_features = torch.cat(resized_features, dim=1)  # (B,C*3,H,W)
+        return self.level_fuse(merged_features)  # (B,C,H,W)
 
     def _get_merged_features(
         self,

@@ -38,7 +38,10 @@ class ImageConditionedPromptPooler(nn.Module):
                 "Expected prompt embeddings with shape [B,P,D] or [B,D], "
                 f"but received {tuple(text_embeddings.shape)}."
             )
-        if text_padding_mask is not None and text_padding_mask.shape != text_embeddings.shape[:2]:
+        if (
+            text_padding_mask is not None
+            and text_padding_mask.shape != text_embeddings.shape[:2]
+        ):
             raise ValueError("text_padding_mask must have shape [B,P].")
 
         image_state = F.normalize(

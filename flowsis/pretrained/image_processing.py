@@ -9,7 +9,6 @@ import torch.nn.functional as F
 from numpy.typing import NDArray
 from PIL import Image
 
-
 DetectorAnnotation = Mapping[str, Any]
 
 
@@ -31,12 +30,16 @@ def image_to_rgb_tensor(image: Any) -> torch.Tensor:
         )
 
     if tensor.ndim != 3:
-        raise ValueError(f"Expected a three-dimensional image, got {tuple(tensor.shape)}.")
+        raise ValueError(
+            f"Expected a three-dimensional image, got {tuple(tensor.shape)}."
+        )
     if tensor.shape[0] in (1, 3):
         return tensor
     if tensor.shape[-1] in (1, 3):
         return tensor.permute(2, 0, 1)
-    raise ValueError(f"Could not identify image channels in shape {tuple(tensor.shape)}.")
+    raise ValueError(
+        f"Could not identify image channels in shape {tuple(tensor.shape)}."
+    )
 
 
 def _resize_shape(height: int, width: int, image_size: int) -> tuple[int, int]:
@@ -59,9 +62,7 @@ def _prepare_detection_annotation(
     resized_height, resized_width = resized_shape
     padded_height, padded_width = padded_shape
     objects = [
-        obj
-        for obj in annotation["annotations"]
-        if int(obj.get("iscrowd", 0)) == 0
+        obj for obj in annotation["annotations"] if int(obj.get("iscrowd", 0)) == 0
     ]
 
     boxes = torch.as_tensor(
@@ -146,9 +147,7 @@ def _preprocess_pixel_batch(
         if image_mean is None or image_std is None:
             image_mean = torch.as_tensor(processor.image_mean, device=device)
             image_std = torch.as_tensor(processor.image_std, device=device)
-        pixels.sub_(image_mean.view(1, 3, 1, 1)).div_(
-            image_std.view(1, 3, 1, 1)
-        )
+        pixels.sub_(image_mean.view(1, 3, 1, 1)).div_(image_std.view(1, 3, 1, 1))
 
     resized_height, resized_width = resized_shape
     pixels = F.pad(
@@ -193,10 +192,7 @@ def preprocess_detr_images(
                 f"Expected a CHW or BCHW image tensor, got {tuple(images.shape)}."
             )
     else:
-        image_batches = [
-            image_to_rgb_tensor(image).unsqueeze(0)
-            for image in images
-        ]
+        image_batches = [image_to_rgb_tensor(image).unsqueeze(0) for image in images]
     if not image_batches:
         raise ValueError("Expected at least one image.")
     batch_size = sum(batch.shape[0] for batch in image_batches)

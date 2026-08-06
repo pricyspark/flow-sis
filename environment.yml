@@ -29,6 +29,7 @@ dependencies:
   - timm
   - pypng
   - pytest
+  - black
   - pip:
     - kernels==0.14.1
     - kaleido

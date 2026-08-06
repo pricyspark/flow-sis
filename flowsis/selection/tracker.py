@@ -52,7 +52,9 @@ class SelectionTracker:
         self._tracks.clear()
         self._next_track_id = 0
 
-    def update(self, detections: Sequence[TrackDetection] | Mapping[str, Any]) -> list[Track]:
+    def update(
+        self, detections: Sequence[TrackDetection] | Mapping[str, Any]
+    ) -> list[Track]:
         normalized_detections = self._normalize_detections(detections)
         self._predict_tracks()
 
@@ -66,7 +68,9 @@ class SelectionTracker:
         )
 
         for track_index, detection_index in matches:
-            self._update_track(self._tracks[track_index], normalized_detections[detection_index])
+            self._update_track(
+                self._tracks[track_index], normalized_detections[detection_index]
+            )
 
         for track_index in unmatched_tracks:
             track = self._tracks[track_index]
@@ -75,11 +79,17 @@ class SelectionTracker:
         for detection_index in unmatched_detections:
             self._start_track(normalized_detections[detection_index])
 
-        self._tracks = [track for track in self._tracks if track.misses <= self.config.max_age]
+        self._tracks = [
+            track for track in self._tracks if track.misses <= self.config.max_age
+        ]
         return [self._to_public_track(track) for track in self._tracks]
 
     def confirmed_tracks(self) -> list[Track]:
-        return [self._to_public_track(track) for track in self._tracks if track.hits >= self.config.min_hits]
+        return [
+            self._to_public_track(track)
+            for track in self._tracks
+            if track.hits >= self.config.min_hits
+        ]
 
     def _normalize_detections(
         self,
@@ -106,12 +116,19 @@ class SelectionTracker:
         )
         track.box = detection.box
         track.score = detection.score
-        track.score_ema = detection.score if track.score_ema == 0.0 else (0.8 * track.score_ema + 0.2 * detection.score)
+        track.score_ema = (
+            detection.score
+            if track.score_ema == 0.0
+            else (0.8 * track.score_ema + 0.2 * detection.score)
+        )
         track.label = detection.label
         track.hits += 1
         track.misses = 0
         track.last_detection_index = detection.index
-        if normalized_motion(previous_box, detection.box) <= self.config.stationary_threshold:
+        if (
+            normalized_motion(previous_box, detection.box)
+            <= self.config.stationary_threshold
+        ):
             track.stationary_frames += 1
         else:
             track.stationary_frames = 0

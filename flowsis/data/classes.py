@@ -9,8 +9,7 @@ from flowsis.utils.common import init_rng
 
 
 class RuntimeCallable(Protocol):
-    def __call__(self, x: Any, /, **kwargs: Any) -> Any:
-        ...
+    def __call__(self, x: Any, /, **kwargs: Any) -> Any: ...
 
 
 class CallablePipeline:
@@ -20,10 +19,13 @@ class CallablePipeline:
         callable_kwargs: Iterable[dict[str, Any]] | None = None,
     ) -> None:
         self.callables = list(callables)
-        self.callable_kwargs = [] if callable_kwargs is None else [dict(kwargs) for kwargs in callable_kwargs]
+        self.callable_kwargs = (
+            []
+            if callable_kwargs is None
+            else [dict(kwargs) for kwargs in callable_kwargs]
+        )
         self.callable_kwargs += [
-            {}
-            for _ in range(len(self.callables) - len(self.callable_kwargs))
+            {} for _ in range(len(self.callables) - len(self.callable_kwargs))
         ]
 
     def __call__(self, x: Any, **runtime_kwargs: Any) -> Any:
@@ -37,7 +39,9 @@ class CallablePipeline:
     def __len__(self) -> int:
         return len(self.callables)
 
-    def append(self, callable_: RuntimeCallable, kwargs: dict[str, Any] | None = None) -> None:
+    def append(
+        self, callable_: RuntimeCallable, kwargs: dict[str, Any] | None = None
+    ) -> None:
         self.callables.append(callable_)
         self.callable_kwargs.append({} if kwargs is None else dict(kwargs))
 
@@ -50,7 +54,7 @@ class SampleContext:
     rng: np.random.Generator | None = None
     seed: int | None = None
     copy_examples: bool = True
-    
+
     def __len__(self) -> int:
         return len(self.dataset)
 
@@ -108,8 +112,8 @@ class SampleContext:
         else:
             selected_count = min(count, len(candidate_indices))
             selected_indices = rng.choice(
-                candidate_indices, 
-                size=selected_count, 
+                candidate_indices,
+                size=selected_count,
                 replace=False,
             )
 

@@ -23,7 +23,6 @@ from flowsis.data.object_records import get_object_records
 from .common import resolve_pretrained_source
 from .image_processing import preprocess_detr_bgr_frame, preprocess_detr_images
 
-
 DetectorArchitecture = Literal["rtdetrv2", "dfine"]
 DetectorImage = Image.Image | NDArray | torch.Tensor
 DetectorImages = DetectorImage | Iterable[DetectorImage]
@@ -232,7 +231,9 @@ class BaseDetector(nn.Module):
     def model_config(self) -> dict[str, Any]:
         config = getattr(self._model, "config", None)
         if config is None or not hasattr(config, "to_dict"):
-            raise TypeError("Detector model does not expose a serializable configuration.")
+            raise TypeError(
+                "Detector model does not expose a serializable configuration."
+            )
         return cast(dict[str, Any], config.to_dict())
 
     def _validate_model_type(self) -> None:
@@ -267,7 +268,9 @@ class BaseDetector(nn.Module):
             if image.shape[0] in {1, 3}:
                 return int(image.shape[1]), int(image.shape[2])
             return int(image.shape[0]), int(image.shape[1])
-        raise ValueError(f"Expected a two- or three-dimensional image tensor, got {image.shape}.")
+        raise ValueError(
+            f"Expected a two- or three-dimensional image tensor, got {image.shape}."
+        )
 
     @staticmethod
     def _normalize_annotation(annotation: dict[str, Any]) -> dict[str, Any]:
@@ -284,7 +287,9 @@ class BaseDetector(nn.Module):
                 for record in get_object_records(annotation)
             ]
         else:
-            raise ValueError("Expected annotation with either 'annotations' or 'objects'.")
+            raise ValueError(
+                "Expected annotation with either 'annotations' or 'objects'."
+            )
 
         return {
             "image_id": int(annotation.get("image_id", 0)),
@@ -308,8 +313,7 @@ class BaseDetector(nn.Module):
                 None
                 if annotations is None
                 else [
-                    self._normalize_annotation(annotation)
-                    for annotation in annotations
+                    self._normalize_annotation(annotation) for annotation in annotations
                 ]
             )
             pixel_values, pixel_mask, labels = preprocess_detr_images(
@@ -389,7 +393,10 @@ class BaseDetector(nn.Module):
                 f"{self.architecture} did not return projected multiscale encoder maps."
             )
         maps = tuple(raw)
-        if any(not isinstance(feature, torch.Tensor) or feature.ndim != 4 for feature in maps):
+        if any(
+            not isinstance(feature, torch.Tensor) or feature.ndim != 4
+            for feature in maps
+        ):
             shapes = [getattr(feature, "shape", None) for feature in maps]
             raise RuntimeError(
                 f"Expected detector feature maps shaped [B,C,H,W], got {shapes}."
@@ -592,7 +599,9 @@ def get_detector_spec(architecture: DetectorArchitecture) -> DetectorSpec:
     try:
         return DETECTOR_SPECS[architecture]
     except KeyError as exc:
-        raise ValueError(f"Unsupported detector architecture: {architecture!r}") from exc
+        raise ValueError(
+            f"Unsupported detector architecture: {architecture!r}"
+        ) from exc
 
 
 def detector_default_model(architecture: DetectorArchitecture) -> str:
@@ -615,7 +624,9 @@ def _metadata_architecture(path: Path) -> DetectorArchitecture | None:
         )
     architecture = metadata.get("architecture")
     if architecture not in DETECTOR_SPECS:
-        raise ValueError(f"Unknown detector architecture in {metadata_path}: {architecture!r}.")
+        raise ValueError(
+            f"Unknown detector architecture in {metadata_path}: {architecture!r}."
+        )
     typed_architecture = cast(DetectorArchitecture, architecture)
     model_type = metadata.get("model_type")
     if model_type not in get_detector_spec(typed_architecture).model_types:
@@ -670,7 +681,9 @@ def resolve_detector(
             cache_dir=cache_dir,
         )
     spec = get_detector_spec(architecture)
-    source = spec.default_model if model_name_or_path is None else str(model_name_or_path)
+    source = (
+        spec.default_model if model_name_or_path is None else str(model_name_or_path)
+    )
 
     path = Path(source)
     metadata_architecture = _metadata_architecture(path) if path.is_dir() else None

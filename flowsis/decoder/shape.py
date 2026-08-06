@@ -9,7 +9,7 @@ from .position import build_2d_sincos_pos_encoding
 
 
 def to_image_tokens(
-    image_features: torch.Tensor,   # (B,C,H,W)
+    image_features: torch.Tensor,  # (B,C,H,W)
     *,
     add_positional_encoding: bool = False,
 ) -> tuple[torch.Tensor, tuple[int, int], torch.Tensor | None]:
@@ -20,7 +20,7 @@ def to_image_tokens(
         )
 
     _, channels, height, width = image_features.shape
-    tokens = image_features.flatten(2).transpose(1, 2) # (B,H*W,C)
+    tokens = image_features.flatten(2).transpose(1, 2)  # (B,H*W,C)
     positional_encoding = None
     if add_positional_encoding:
         positional_encoding = build_2d_sincos_pos_encoding(
@@ -29,7 +29,7 @@ def to_image_tokens(
             channels,
             device=image_features.device,
             dtype=image_features.dtype,
-        ) # (1,H*W,C)
+        )  # (1,H*W,C)
     return tokens, (height, width), positional_encoding
 
 
@@ -79,7 +79,9 @@ def pool_text_embeddings(
     return (text_embeddings * valid_mask).sum(dim=1) / valid_count
 
 
-def validate_feature_list(multi_image_features: Iterable[torch.Tensor]) -> list[torch.Tensor]:
+def validate_feature_list(
+    multi_image_features: Iterable[torch.Tensor],
+) -> list[torch.Tensor]:
     multi_image_features = list(multi_image_features)
     if not multi_image_features:
         raise ValueError("Expected at least one image feature map.")

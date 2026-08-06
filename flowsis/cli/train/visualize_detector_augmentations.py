@@ -20,7 +20,6 @@ from flowsis.cli.train.train_detector import (
     load_label_metadata,
 )
 
-
 DEFAULT_OUTPUT_DIR = Path("outputs/detector-augmentation-visualization")
 MASK_ALPHA = 88
 COLORS = (
@@ -139,7 +138,9 @@ def select_indices(
         max_index = len(split_dataset) - 1
         for index in indices:
             if index < 0 or index > max_index:
-                raise IndexError(f"Requested index {index} is out of bounds for dataset length {len(split_dataset)}.")
+                raise IndexError(
+                    f"Requested index {index} is out of bounds for dataset length {len(split_dataset)}."
+                )
         return indices
 
     candidates = list(range(len(split_dataset)))
@@ -188,7 +189,9 @@ def capture_pipeline_stages(
             current_example = result
 
         suffix = " (final)" if step_index == len(steps) else ""
-        snapshots.append((f"{step_index}. {name}{suffix}", clone_example(current_example)))
+        snapshots.append(
+            (f"{step_index}. {name}{suffix}", clone_example(current_example))
+        )
 
     if not steps:
         snapshots.append(("final", clone_example(current_example)))
@@ -216,7 +219,9 @@ def render_stage(
         if isinstance(mask, np.ndarray) and mask.shape == (canvas.height, canvas.width):
             mask_rgba = np.zeros((canvas.height, canvas.width, 4), dtype=np.uint8)
             mask_rgba[mask.astype(bool)] = (*rgb, MASK_ALPHA)
-            overlay = Image.alpha_composite(overlay, Image.fromarray(mask_rgba, mode="RGBA"))
+            overlay = Image.alpha_composite(
+                overlay, Image.fromarray(mask_rgba, mode="RGBA")
+            )
 
     canvas = Image.alpha_composite(canvas.convert("RGBA"), overlay).convert("RGB")
     draw = ImageDraw.Draw(canvas)
@@ -239,7 +244,10 @@ def render_stage(
         text_height = bottom - top
         text_x = x1
         text_y = max(0.0, y1 - text_height - 6)
-        draw.rectangle((text_x, text_y, text_x + text_width + 8, text_y + text_height + 4), fill=color)
+        draw.rectangle(
+            (text_x, text_y, text_x + text_width + 8, text_y + text_height + 4),
+            fill=color,
+        )
         draw.text((text_x + 4, text_y + 2), text, fill="white", font=font)
 
     header = (
@@ -260,7 +268,9 @@ def render_stage(
     footer_width = right - left
     footer_height = bottom - top
     footer_y = max(0, canvas.height - footer_height - 8)
-    draw.rectangle((0, footer_y - 2, footer_width + 12, footer_y + footer_height + 6), fill="black")
+    draw.rectangle(
+        (0, footer_y - 2, footer_width + 12, footer_y + footer_height + 6), fill="black"
+    )
     draw.text((6, footer_y), footer, fill="white", font=font)
 
     return canvas
@@ -338,9 +348,13 @@ def save_visualization_set(
         sample_dir.mkdir(parents=True, exist_ok=True)
 
         if save_stage_images:
-            for stage_index, ((stage_name, _), rendered) in enumerate(zip(snapshots, rendered_stages)):
+            for stage_index, ((stage_name, _), rendered) in enumerate(
+                zip(snapshots, rendered_stages)
+            ):
                 stage_slug = slugify(stage_name)
-                rendered.save(sample_dir / f"{stage_index:02d}_{stage_slug}.jpg", quality=95)
+                rendered.save(
+                    sample_dir / f"{stage_index:02d}_{stage_slug}.jpg", quality=95
+                )
 
         strip = make_stage_strip(rendered_stages, tile_size=tile_size)
         strip_path = sample_dir / "stages_strip.jpg"
@@ -370,9 +384,17 @@ def main() -> None:
 
     requested_pipelines = []
     if args.pipeline in ("train", "both"):
-        requested_pipelines.append(("train", args.train_split, build_train_augmentation_steps(args)))
+        requested_pipelines.append(
+            ("train", args.train_split, build_train_augmentation_steps(args))
+        )
     if args.pipeline in ("validation", "both"):
-        requested_pipelines.append(("validation", args.validation_split, build_validation_augmentation_steps(args)))
+        requested_pipelines.append(
+            (
+                "validation",
+                args.validation_split,
+                build_validation_augmentation_steps(args),
+            )
+        )
 
     if not requested_pipelines:
         raise ValueError("No visualization pipelines were selected.")
@@ -381,7 +403,9 @@ def main() -> None:
 
     for pipeline_name, split_name, steps in requested_pipelines:
         if split_name not in dataset:
-            raise KeyError(f"Split '{split_name}' not found in dataset. Available splits: {list(dataset.keys())}")
+            raise KeyError(
+                f"Split '{split_name}' not found in dataset. Available splits: {list(dataset.keys())}"
+            )
 
         split_dataset = dataset[split_name]
         indices = select_indices(
