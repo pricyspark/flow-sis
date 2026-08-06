@@ -15,6 +15,7 @@ from .detector import (
     load_detector,
     resolve_detector,
 )
+from .flow import PTLFlowEstimator, load_flow_estimator
 from .siglip2 import SigLIP2
 
 __all__ = [
@@ -27,11 +28,13 @@ __all__ = [
     "DetectorForwardResult",
     "DetectorInferenceResult",
     "DetectorSpec",
+    "PTLFlowEstimator",
     "SigLIP2",
     "detector_default_model",
     "detector_default_output_dir",
     "get_detector_spec",
     "infer_detector_architecture",
     "load_detector",
+    "load_flow_estimator",
     "resolve_detector",
 ]
