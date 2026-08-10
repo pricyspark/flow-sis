@@ -205,3 +205,15 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+
+
+python -m flowsis.cli.eval.profile_base \
+  --video-source data/raw/1.mp4 \
+  --detector-model outputs/good/dfine-l-overlap \
+  --head-path outputs/good/head-dfine-l-overlap \
+  --no-amp \
+  --compile both \
+  --compile-mode max-autotune \
+  --output-json outputs/profile-compile-both-max-autotune.json
