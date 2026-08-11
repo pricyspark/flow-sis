@@ -89,9 +89,15 @@ class FlowSISBase(nn.Module):
         text_embeddings: torch.Tensor,
         box: torch.Tensor,
         *,
+        object_query: torch.Tensor | None = None,
         output_size: tuple[int, int],
     ) -> torch.Tensor:
         """Predict one selected object's mask logits as a device-resident [H,W] tensor."""
+        head_kwargs: dict[str, Any] = {}
+        if object_query is not None:
+            if object_query.ndim == 1:
+                object_query = object_query.unsqueeze(0)
+            head_kwargs["object_queries"] = object_query
         with build_autocast_context(enabled=self.use_amp, device=self.device):
             output = self.head(
                 feature_maps,
@@ -99,6 +105,7 @@ class FlowSISBase(nn.Module):
                 object_boxes=box,
                 mask_output_size=output_size,
                 return_intermediates=False,
+                **head_kwargs,
             )
         mask_logits = cast(torch.Tensor, output["mask_logits"])
         if mask_logits.ndim != 3 or mask_logits.shape[0] != 1:
@@ -127,6 +134,7 @@ class FlowSISBase(nn.Module):
         text_embeddings: torch.Tensor,
         box: torch.Tensor,
         *,
+        object_query: torch.Tensor | None = None,
         output_size: tuple[int, int],
         mask_threshold: float | None = None,
     ) -> torch.Tensor:
@@ -135,6 +143,7 @@ class FlowSISBase(nn.Module):
             feature_maps,
             text_embeddings,
             box,
+            object_query=object_query,
             output_size=output_size,
         )
         return self.binarize_logits(logits, threshold=mask_threshold)
@@ -175,10 +184,19 @@ class FlowSISBase(nn.Module):
             device=self.device,
             dtype=torch.float32,
         )
+        object_query = None
+        query_embeddings = getattr(inference, "query_embeddings", None)
+        query_indices = inference.detections[0].get("query_indices")
+        if isinstance(query_embeddings, torch.Tensor) and isinstance(
+            query_indices, torch.Tensor
+        ):
+            raw_query_index = int(query_indices[selection.index].item())
+            object_query = query_embeddings[0, raw_query_index]
         logits = self.predict_logits(
             list(inference.feature_maps),
             text_embeddings,
             box,
+            object_query=object_query,
             output_size=(height, width),
         )
         self.previous_selection = selection

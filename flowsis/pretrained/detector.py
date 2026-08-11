@@ -82,6 +82,9 @@ class DetectorForwardResult:
 class DetectorInferenceResult:
     detections: list[Detection]
     feature_maps: tuple[torch.Tensor, ...]
+    query_embeddings: torch.Tensor | None = None
+    query_logits: torch.Tensor | None = None
+    query_boxes: torch.Tensor | None = None
 
 
 class Detector(Protocol):
@@ -403,6 +406,38 @@ class BaseDetector(nn.Module):
             )
         return maps
 
+    @staticmethod
+    def _extract_query_tensor(
+        outputs: ModelOutput,
+        name: str,
+    ) -> torch.Tensor | None:
+        value = getattr(outputs, name, None)
+        if not isinstance(value, torch.Tensor):
+            return None
+        if value.ndim != 3:
+            return None
+        return value
+
+    def _query_indices(
+        self,
+        outputs: ModelOutput,
+        *,
+        threshold: float,
+    ) -> list[torch.Tensor] | None:
+        logits = self._extract_query_tensor(outputs, "logits")
+        if logits is None:
+            return None
+
+        num_queries = logits.shape[1]
+        num_classes = logits.shape[2]
+        scores = logits.sigmoid().flatten(1)
+        top_scores, flat_indices = torch.topk(scores, num_queries, dim=-1)
+        query_indices = flat_indices // num_classes
+        return [
+            indices[image_scores > threshold]
+            for image_scores, indices in zip(top_scores, query_indices, strict=True)
+        ]
+
     def forward(
         self,
         images: DetectorImages,
@@ -442,10 +477,29 @@ class BaseDetector(nn.Module):
             threshold=threshold,
             target_sizes=target_sizes,
         )
+        query_indices = self._query_indices(outputs, threshold=threshold)
+        if query_indices is not None:
+            if len(query_indices) != len(detections):
+                raise RuntimeError(
+                    "Detector query-index batch does not match postprocessed detections."
+                )
+            for detection, indices in zip(detections, query_indices, strict=True):
+                if indices.shape != detection["scores"].shape:
+                    raise RuntimeError(
+                        "Detector query indices do not align with postprocessed scores."
+                    )
+                detection["query_indices"] = indices
+
         feature_maps = self._extract_feature_maps(outputs)
         return DetectorInferenceResult(
             detections=detections,
             feature_maps=feature_maps,
+            query_embeddings=self._extract_query_tensor(
+                outputs,
+                "last_hidden_state",
+            ),
+            query_logits=self._extract_query_tensor(outputs, "logits"),
+            query_boxes=self._extract_query_tensor(outputs, "pred_boxes"),
         )
 
     @torch.inference_mode()

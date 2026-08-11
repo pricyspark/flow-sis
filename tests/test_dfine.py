@@ -55,6 +55,22 @@ def test_dfine_inference_returns_detections_and_multiscale_features() -> None:
         (1, 32, 4, 4),
         (1, 32, 2, 2),
     ]
+    assert result.query_embeddings is not None
+    assert result.query_logits is not None
+    assert result.query_boxes is not None
+    assert result.query_embeddings.shape == (1, 10, 32)
+    assert result.query_logits.shape == (1, 10, 3)
+    assert result.query_boxes.shape == (1, 10, 4)
+    query_indices = result.detections[0]["query_indices"]
+    assert query_indices.shape == result.detections[0]["scores"].shape
+    assert ((0 <= query_indices) & (query_indices < 10)).all()
+    selected_boxes = result.query_boxes[0, query_indices]
+    centers, sizes = selected_boxes.split(2, dim=-1)
+    expected_boxes = torch.cat(
+        (centers - 0.5 * sizes, centers + 0.5 * sizes),
+        dim=-1,
+    ) * torch.tensor([64.0, 48.0, 64.0, 48.0])
+    torch.testing.assert_close(result.detections[0]["boxes"], expected_boxes)
 
 
 def test_extract_feature_maps_supports_dfine() -> None:

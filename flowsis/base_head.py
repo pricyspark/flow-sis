@@ -216,6 +216,7 @@ class BaseFusionHead(nn.Module):
         deformable_offset_scale: float,
         aggregator_dim: int | None = None,
         *,
+        query_dim: int | None = None,
         conv_merge_refinement: Literal["standard", "depthwise"] = "depthwise",
         channel_aggregation: Literal["none", "sigmoid", "softmax"] = "sigmoid",
         mask_feature_source: Literal["merged", "highest_resolution"] = "merged",
@@ -248,6 +249,19 @@ class BaseFusionHead(nn.Module):
         self.channel_aggregation = channel_aggregation
         self.mask_feature_source = mask_feature_source
         self.mask_output_dim = int(mask_output_dim)
+        self.query_dim = None if query_dim is None else int(query_dim)
+
+        self.query_norm = None
+        self.query_affine = None
+        if self.query_dim is not None:
+            if self.query_dim <= 0:
+                raise ValueError(
+                    "query_dim must be positive when query conditioning is enabled."
+                )
+            self.query_norm = nn.LayerNorm(self.query_dim)
+            self.query_affine = nn.Linear(self.query_dim, image_dim * 2)
+            nn.init.zeros_(self.query_affine.weight)
+            nn.init.zeros_(self.query_affine.bias)
 
         self.decoder = ImageTextFusion(
             num_layers=num_decode_layers,
@@ -294,6 +308,34 @@ class BaseFusionHead(nn.Module):
         )
         self.box_projection = nn.Conv2d(1, decode_embed_dim, kernel_size=1, bias=False)
         nn.init.zeros_(self.box_projection.weight)
+
+    def _condition_on_object_query(
+        self,
+        feature_list: Iterable[torch.Tensor],
+        object_queries: torch.Tensor | None,
+    ) -> list[torch.Tensor]:
+        features = list(feature_list)
+        if self.query_affine is None or self.query_norm is None:
+            return features
+        if object_queries is None:
+            raise ValueError(
+                "This head has detector-query conditioning enabled, but no "
+                "object_queries were provided."
+            )
+        if object_queries.ndim != 2 or object_queries.shape[1] != self.query_dim:
+            raise ValueError(
+                f"Expected object_queries shaped [B,{self.query_dim}], got "
+                f"{tuple(object_queries.shape)}."
+            )
+        if any(feature.shape[0] != object_queries.shape[0] for feature in features):
+            raise ValueError("Object-query and image-feature batches must match.")
+
+        gamma, beta = self.query_affine(self.query_norm(object_queries)).chunk(
+            2, dim=-1
+        )
+        gamma = torch.tanh(gamma).unsqueeze(-1).unsqueeze(-1)
+        beta = beta.unsqueeze(-1).unsqueeze(-1)
+        return [feature * (1.0 + gamma) + beta for feature in features]
 
     @staticmethod
     def _rasterize_boxes(
@@ -367,11 +409,16 @@ class BaseFusionHead(nn.Module):
         text_padding_mask: torch.Tensor | None = None,
         *,
         object_boxes: torch.Tensor | None = None,
+        object_queries: torch.Tensor | None = None,
         mask_output_size: tuple[int, int] | None = None,
         return_intermediates: bool = True,
     ) -> dict[str, torch.Tensor | list[torch.Tensor] | None]:
-        fused_feature_list, merged_features = self.decoder(
+        conditioned_image_features = self._condition_on_object_query(
             multi_image_features,
+            object_queries,
+        )
+        fused_feature_list, merged_features = self.decoder(
+            conditioned_image_features,
             text_embeddings,
             text_padding_mask=text_padding_mask,
             return_merged_features=True,

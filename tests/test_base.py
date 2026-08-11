@@ -30,6 +30,7 @@ class FakeDetector(nn.Module):
                 "boxes": self.anchor.new_tensor([[1.0, 1.0, 7.0, 7.0]]),
                 "scores": self.anchor.new_tensor([0.9]),
                 "labels": torch.tensor([1], device=self.anchor.device),
+                "query_indices": torch.tensor([1], device=self.anchor.device),
             }
         else:
             detections = {
@@ -40,10 +41,18 @@ class FakeDetector(nn.Module):
                     dtype=torch.int64,
                     device=self.anchor.device,
                 ),
+                "query_indices": torch.empty(
+                    (0,),
+                    dtype=torch.int64,
+                    device=self.anchor.device,
+                ),
             }
         return SimpleNamespace(
             detections=[detections],
             feature_maps=(self.anchor.new_ones((1, 4, 2, 2)),),
+            query_embeddings=self.anchor.new_tensor(
+                [[[1.0, 2.0, 3.0, 4.0], [5.0, 6.0, 7.0, 8.0]]]
+            ),
         )
 
 
@@ -51,6 +60,7 @@ class FakeHead(nn.Module):
     def __init__(self) -> None:
         super().__init__()
         self.anchor = nn.Parameter(torch.tensor(1.0))
+        self.last_object_queries: torch.Tensor | None = None
 
     def forward(
         self,
@@ -58,9 +68,11 @@ class FakeHead(nn.Module):
         text_embeddings: torch.Tensor,
         *,
         object_boxes: torch.Tensor,
+        object_queries: torch.Tensor | None = None,
         mask_output_size: tuple[int, int],
         return_intermediates: bool,
     ) -> dict[str, torch.Tensor]:
+        self.last_object_queries = object_queries
         batch_size = feature_maps[0].shape[0]
         logits = self.anchor.expand(batch_size, *mask_output_size)
         return {"mask_logits": logits}
@@ -106,6 +118,11 @@ def test_infer_logits_and_binarization_remain_on_model_device(
     assert model.current_selection is model.previous_selection
     assert model.selected_label == "object"
     assert len(model.history) == 1
+    assert isinstance(model.head, FakeHead)
+    torch.testing.assert_close(
+        model.head.last_object_queries,
+        torch.tensor([[5.0, 6.0, 7.0, 8.0]]),
+    )
 
 
 def test_infer_returns_none_without_detection_and_reset_clears_state(

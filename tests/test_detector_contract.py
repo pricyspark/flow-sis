@@ -57,7 +57,7 @@ class FakeModel(nn.Module):
         return SimpleNamespace(
             loss=pixel_values.mean() if labels is not None else None,
             loss_dict={"loss": pixel_values.mean()} if labels is not None else {},
-            logits=torch.zeros(batch_size, 2, 1),
+            logits=torch.full((batch_size, 2, 1), -100.0),
             encoder_last_hidden_state=[
                 torch.ones(batch_size, 4, 2, 2),
                 torch.ones(batch_size, 4, 1, 1),
