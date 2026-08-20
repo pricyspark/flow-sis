@@ -1,6 +1,6 @@
 import time
 import argparse
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from functools import partial
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -388,7 +388,10 @@ def build_validation_dataset(
 
 
 def collate_online_examples(
-    batch: list[dict[str, Any]], *, image_size: int
+    batch: list[dict[str, Any]],
+    *,
+    image_size: int,
+    text_embeddings_by_label: Mapping[int, torch.Tensor] | None = None,
 ) -> dict[str, Any]:
     image_tensors = [
         image_to_rgb_tensor(get_image(example, convert_mode="RGB")) for example in batch
@@ -414,7 +417,15 @@ def collate_online_examples(
             [image_index for image_index, _, _ in object_records], dtype=torch.long
         ),
         "text_embeddings": torch.stack(
-            [load_text_embedding(obj) for _, _, obj in object_records], dim=0
+            [
+                (
+                    load_text_embedding(obj)
+                    if text_embeddings_by_label is None
+                    else text_embeddings_by_label[int(obj["category"])]
+                )
+                for _, _, obj in object_records
+            ],
+            dim=0,
         ),
         "target_masks": torch.stack(
             [

@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 import torch
-from torch.amp import GradScaler
+from torch.amp.grad_scaler import GradScaler
 
 from flowsis.artifacts import atomic_torch_save, atomic_write_text
 

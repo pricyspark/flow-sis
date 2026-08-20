@@ -26,6 +26,24 @@ flowsis-train-base-head --detector dfine
 flowsis-train-base-head --detector-model outputs/detectors/dfine/final
 ```
 
+Measure how much a trained base head depends on its text prompts:
+
+```bash
+flowsis-ablate-text-conditioning \
+  --dataset-path data/segmentation-dataset \
+  --split test \
+  --detector-model outputs/detectors/dfine/final \
+  --head-path outputs/base/final \
+  --text-embeddings-dir data/manifests/text-embeddings \
+  --output-path outputs/text-ablation.json
+```
+
+The evaluation holds detector features, boxes, and matched detector queries fixed,
+then reruns the head with the correct prompt, a prompt from a wrong class, scrambled
+embedding dimensions, and zero embeddings. The JSON report contains paired mask
+quality changes and 95% bootstrap confidence intervals. Use `--max-images 16` for
+a quick smoke test before evaluating the complete held-out split.
+
 The detector API follows the same rule:
 
 ```python

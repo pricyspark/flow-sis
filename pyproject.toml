@@ -15,6 +15,7 @@ include = ["flowsis*"]
 [project.scripts]
 flowsis-live-detector = "flowsis.cli.deploy.live_detector:main"
 flowsis-evaluate-detector = "flowsis.cli.eval.evaluate_detector:main"
+flowsis-ablate-text-conditioning = "flowsis.cli.eval.ablate_text_conditioning:main"
 flowsis-train-detector = "flowsis.cli.train.train_detector:main"
 flowsis-train-base-head = "flowsis.cli.train.train_base_head:main"
 flowsis-train-recurrent = "flowsis.cli.train.train_recurrent:main"
